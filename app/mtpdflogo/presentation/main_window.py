@@ -1,0 +1,1442 @@
+"""Usable PDF overlay workspace and batch export UI."""
+
+from __future__ import annotations
+
+import multiprocessing
+import os
+import threading
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from pathlib import Path
+from queue import Empty
+from typing import Any
+
+import fitz
+from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QShortcut,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QGraphicsScene,
+    QGraphicsTextItem,
+    QGraphicsView,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSpinBox,
+    QSplitter,
+    QStatusBar,
+    QStyle,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from mtpdflogo.application.batch import (
+    SUPPORTED_IMAGE_SUFFIXES,
+    SUPPORTED_INPUT_SUFFIXES,
+    BatchJob,
+    discover_supported_files,
+    job_key,
+    load_manifest,
+    save_manifest,
+    validate_jobs,
+)
+from mtpdflogo.config import (
+    load_config,
+    load_overlay_preset,
+    load_preferences,
+    save_overlay_preset,
+    save_preferences,
+)
+from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.infrastructure.image_overlay_service import apply_image_overlays
+from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, apply_overlays
+
+
+def _process_file_job(
+    source: Path,
+    destination: Path,
+    specs: list[PdfOverlaySpec],
+    progress_queue: Any,
+) -> None:
+    """Top-level worker function so it is safe for Windows spawn/PyInstaller."""
+    processor = (
+        apply_image_overlays
+        if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+        else apply_overlays
+    )
+    processor(
+        source,
+        destination,
+        specs,
+        progress_callback=lambda current, total: progress_queue.put(
+            (str(source), current, total)
+        ),
+    )
+
+
+class ExportWorker(QObject):
+    progress = Signal(int, str)
+    file_progress = Signal(str, int, int)
+    file_updated = Signal(str, str, int)
+    file_failed = Signal(str, str)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        jobs: list[tuple[Path, Path]],
+        specs: list[PdfOverlaySpec],
+        manifest_path: Path,
+        worker_count: int,
+    ) -> None:
+        super().__init__()
+        self.jobs = jobs
+        self.specs = specs
+        self.manifest_path = manifest_path
+        self.worker_count = worker_count
+        self.cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def run(self) -> None:
+        """Run jobs while forwarding real page-level progress to the UI."""
+        total = len(self.jobs)
+        completed = 0
+        failures = 0
+        manifest = load_manifest(self.manifest_path)
+        pending_jobs: list[tuple[Path, Path]] = []
+        for source, destination in self.jobs:
+            key = job_key(BatchJob(source, destination))
+            source_stat = source.stat()
+            record = manifest.get(key, {})
+            if (
+                record.get("status") == "completed"
+                and record.get("source_size") == source_stat.st_size
+                and record.get("source_mtime_ns") == source_stat.st_mtime_ns
+                and destination.exists()
+            ):
+                completed += 1
+                self.file_progress.emit(str(source), 1, 1)
+                self.file_updated.emit(str(source), "Completed", 100)
+            else:
+                pending_jobs.append((source, destination))
+        if not pending_jobs:
+            self.finished.emit(f"ไม่มีไฟล์ใหม่ — ข้าม {completed} ไฟล์ที่เสร็จแล้ว")
+            return
+        try:
+            worker_count = min(max(1, self.worker_count), len(pending_jobs))
+            context = multiprocessing.get_context("spawn")
+            with multiprocessing.Manager() as manager:
+                progress_queue = manager.Queue()
+                with ProcessPoolExecutor(max_workers=worker_count, mp_context=context) as pool:
+                    futures = {
+                        pool.submit(
+                            _process_file_job, source, destination, self.specs, progress_queue
+                        ): (source, destination)
+                        for source, destination in pending_jobs
+                    }
+                    pending = set(futures)
+                    while pending:
+                        try:
+                            while True:
+                                name, current, pages = progress_queue.get_nowait()
+                                self.file_progress.emit(name, current, pages)
+                        except Empty:
+                            pass
+                        if self.cancel_event.is_set():
+                            for future in pending:
+                                future.cancel()
+                            break
+                        done, pending = wait(
+                            pending, timeout=0.2, return_when=FIRST_COMPLETED
+                        )
+                        for future in done:
+                            source, destination = futures[future]
+                            source_stat = source.stat()
+                            key = job_key(BatchJob(source, destination))
+                            try:
+                                future.result()
+                            except Exception as error:
+                                failures += 1
+                                manifest[key] = {
+                                    "status": "failed", "error": str(error),
+                                    "source_size": source_stat.st_size,
+                                    "source_mtime_ns": source_stat.st_mtime_ns,
+                                }
+                                save_manifest(self.manifest_path, manifest)
+                                self.file_updated.emit(str(source), "Failed", 0)
+                                self.file_failed.emit(str(source), str(error))
+                            else:
+                                completed += 1
+                                manifest[key] = {
+                                    "status": "completed", "source_size": source_stat.st_size,
+                                    "source_mtime_ns": source_stat.st_mtime_ns,
+                                }
+                                save_manifest(self.manifest_path, manifest)
+                                self.file_progress.emit(str(source), 1, 1)
+                                self.file_updated.emit(str(source), "Completed", 100)
+                            self.progress.emit(
+                                int((completed + failures) * 100 / total), source.name
+                            )
+            if self.cancel_event.is_set():
+                self.finished.emit(
+                    f"ยกเลิกแล้ว: สำเร็จ {completed} ไฟล์ | Workers: {worker_count}"
+                )
+            else:
+                self.finished.emit(
+                    f"สำเร็จ {completed} ไฟล์, ล้มเหลว {failures} ไฟล์ | Workers: {worker_count}"
+                )
+        except Exception as error:  # pragma: no cover - worker/UI boundary
+            self.failed.emit(str(error))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self._document: fitz.Document | None = None
+        self._config = load_config()
+        self._preferences = load_preferences()
+        self._preview_font_families: dict[str, str] = {}
+        self._source_path: Path | None = None
+        self._pdf_path: Path | None = None
+        self._image_path: Path | None = None
+        self._input_root: Path | None = None
+        self._scene = QGraphicsScene(self)
+        self._overlays: list[dict[str, Any]] = []
+        self._pending_batch_jobs: list[tuple[Path, Path]] = []
+        self._last_export_jobs: list[tuple[Path, Path]] = []
+        self._preview_bakes_overlays = True
+        self._updating_properties = False
+        self._thread: QThread | None = None
+        self._worker: ExportWorker | None = None
+        self.setWindowTitle("MTPDFLogo — PDF Overlay Studio")
+        self.resize(1500, 900)
+        self._build_ui()
+        shortcut = QShortcut(QKeySequence("Delete"), self)
+        shortcut.activated.connect(self._delete_selected)
+        self._refresh_preview()
+        self._update_pipeline()
+
+    def _build_ui(self) -> None:
+        toolbar = QToolBar("Main toolbar", self)
+        toolbar.setObjectName("mainToolbar")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        action = toolbar.addAction("เลือก File(s)")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        action.triggered.connect(self._select_input_files)
+        action = toolbar.addAction("เลือก Folder")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        action.triggered.connect(self._choose_batch_input_folder)
+        action = toolbar.addAction("เพิ่ม Text")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        action.triggered.connect(lambda: self._add_overlay(OverlayType.TEXT))
+        action = toolbar.addAction("เพิ่ม Logo")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        action.triggered.connect(lambda: self._add_overlay(OverlayType.IMAGE))
+        action = toolbar.addAction("เพิ่ม Text+Logo")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView))
+        action.triggered.connect(self._add_text_and_logo)
+        toolbar.addSeparator()
+        action = toolbar.addAction("บันทึก Settings")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        action.triggered.connect(self._save_overlay_settings)
+        action = toolbar.addAction("โหลด Settings")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        action.triggered.connect(self._load_overlay_settings)
+        toolbar.addSeparator()
+        action = toolbar.addAction("Export Current File")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        action.triggered.connect(self._export_single)
+        self.start_batch_action = toolbar.addAction("▶ Start Batch")
+        self.start_batch_action.setEnabled(False)
+        self.start_batch_action.triggered.connect(self._start_pending_batch)
+        self.cancel_action = toolbar.addAction("หยุด Batch")
+        self.cancel_action.setToolTip("หยุดรับงานใหม่ และรอไฟล์ที่กำลังทำอยู่จบอย่างปลอดภัย")
+        self.cancel_action.setEnabled(False)
+        self.cancel_action.triggered.connect(self._cancel_export)
+
+        root = QSplitter(Qt.Orientation.Horizontal)
+        root.setChildrenCollapsible(False)
+        root.addWidget(self._build_overlay_panel())
+        root.addWidget(self._build_preview_panel())
+        root.addWidget(self._build_properties_panel())
+        root.setSizes([290, 850, 360])
+        workspace = QSplitter(Qt.Orientation.Vertical)
+        workspace.setObjectName("workspaceSplitter")
+        workspace.setChildrenCollapsible(False)
+        workspace.addWidget(root)
+        workspace.addWidget(self._build_queue_panel())
+        workspace.setStretchFactor(0, 5)
+        workspace.setStretchFactor(1, 2)
+        workspace.setSizes([670, 250])
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(10, 8, 10, 10)
+        central_layout.setSpacing(8)
+        central_layout.addWidget(self._build_pipeline_panel())
+        central_layout.addWidget(workspace, 1)
+        self.setCentralWidget(central)
+        self.setStatusBar(QStatusBar(self))
+        self.statusBar().showMessage("พร้อมใช้งาน — เลือก PDF/Image File(s) เพื่อเริ่ม")
+
+    def _build_pipeline_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("pipelinePanel")
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(8)
+        self.pipeline_labels: list[QLabel] = []
+        steps = [
+            ("1", "เลือกไฟล์/โฟลเดอร์"),
+            ("2", "ตั้ง Text/Logo"),
+            ("3", "ตั้ง Output"),
+            ("4", "Start Batch"),
+            ("5", "ตรวจ Output"),
+        ]
+        for number, text in steps:
+            label = QLabel(f"{number}  {text}")
+            label.setObjectName("pipelineStep")
+            layout.addWidget(label)
+            self.pipeline_labels.append(label)
+        layout.addStretch()
+        self.pipeline_summary = QLabel("รอเลือกไฟล์")
+        self.pipeline_summary.setObjectName("pipelineSummary")
+        layout.addWidget(self.pipeline_summary)
+        return panel
+
+    def _update_pipeline(self, summary: str | None = None) -> None:
+        if not hasattr(self, "pipeline_labels"):
+            return
+        has_pdf = self.queue_table.rowCount() > 0 or self._source_path is not None
+        has_overlay = bool(self._overlays)
+        has_output = bool(self.batch_output_folder.text().strip())
+        is_running = self.cancel_action.isEnabled()
+        has_output_preview = self._source_path is not None and not self._preview_bakes_overlays
+        done_states = [
+            has_pdf,
+            has_overlay,
+            has_output,
+            is_running or has_output_preview,
+            has_output_preview,
+        ]
+        if is_running:
+            active_index = 3
+        elif has_output_preview:
+            active_index = 4
+        elif not has_pdf:
+            active_index = 0
+        elif not has_overlay:
+            active_index = 1
+        elif not has_output:
+            active_index = 2
+        else:
+            active_index = 3
+        for index, label in enumerate(self.pipeline_labels):
+            is_active = index == active_index
+            font = label.font()
+            font.setBold(is_active)
+            label.setFont(font)
+            label.setEnabled(is_active or done_states[index])
+            if done_states[index] and not is_active:
+                label.setToolTip("ขั้นตอนนี้พร้อมแล้ว")
+            elif is_active:
+                label.setToolTip("ขั้นตอนปัจจุบัน")
+            else:
+                label.setToolTip("ยังรอข้อมูลก่อนหน้า")
+        if summary is None:
+            if is_running:
+                summary = "กำลังประมวลผล"
+            elif has_output_preview:
+                summary = "เสร็จแล้ว พร้อมตรวจ Output"
+            elif has_pdf and has_overlay and has_output:
+                summary = "พร้อมเริ่ม Batch"
+            elif has_pdf and has_overlay:
+                summary = "รอ Output Folder"
+            elif has_pdf:
+                summary = "รอตั้ง Text/Logo"
+            else:
+                summary = "รอเลือกไฟล์"
+        self.pipeline_summary.setText(summary)
+
+    def _update_queue_summary(self) -> None:
+        if not hasattr(self, "queue_summary"):
+            return
+        total = self.queue_table.rowCount()
+        if total == 0:
+            self.queue_summary.setText("ยังไม่มีไฟล์ใน queue")
+            return
+        statuses: dict[str, int] = {}
+        for row in range(total):
+            status_item = self.queue_table.item(row, 5)
+            status = status_item.text() if status_item else "Pending"
+            statuses[status] = statuses.get(status, 0) + 1
+        output_ready = bool(self._pending_batch_jobs) and self.start_batch_action.isEnabled()
+        status_text = ", ".join(f"{name}: {count}" for name, count in sorted(statuses.items()))
+        ready_text = "พร้อมเริ่ม" if output_ready else "รอ Output Folder หรือ settings"
+        workers = self.worker_count.value() if hasattr(self, "worker_count") else 1
+        self.queue_summary.setText(
+            f"{total} ไฟล์ใน queue | {status_text} | Workers: {workers} | {ready_text}"
+        )
+
+    @staticmethod
+    def _max_worker_limit() -> int:
+        return max(1, min(os.cpu_count() or 2, 16))
+
+    def _build_queue_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setMinimumHeight(260)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        header = QHBoxLayout()
+        title = QLabel("Batch Workspace")
+        title.setObjectName("sectionTitle")
+        header.addWidget(title)
+        header.addStretch()
+        remove = QPushButton("ลบรายการที่เลือก")
+        remove.clicked.connect(self._remove_queue_rows)
+        clear = QPushButton("ล้าง Queue")
+        clear.clicked.connect(self._clear_queue)
+        header.addWidget(remove)
+        header.addWidget(clear)
+        layout.addLayout(header)
+        setup_row = QHBoxLayout()
+        input_group = QGroupBox("Input")
+        input_row = QHBoxLayout(input_group)
+        input_row.addWidget(QLabel("Folder:"))
+        self.batch_input_folder = QLineEdit()
+        self.batch_input_folder.setPlaceholderText("เลือกหรือวาง Folder ต้นทาง")
+        browse_input = QPushButton("เลือก Folder...")
+        browse_input.clicked.connect(self._choose_batch_input_folder)
+        load_folder = QPushButton("โหลดจาก Folder")
+        load_folder.clicked.connect(self._load_input_folder_files)
+        input_row.addWidget(self.batch_input_folder, 1)
+        input_row.addWidget(browse_input)
+        input_row.addWidget(load_folder)
+        setup_row.addWidget(input_group, 2)
+        output_group = QGroupBox("Output")
+        output_row = QHBoxLayout(output_group)
+        output_row.addWidget(QLabel("Folder:"))
+        self.batch_output_folder = QLineEdit(
+            str(self._preferences.output_folder) if self._preferences.output_folder else ""
+        )
+        self.batch_output_folder.setPlaceholderText("เลือกหรือวาง Folder ปลายทาง")
+        self.batch_output_folder.editingFinished.connect(self._batch_output_text_changed)
+        browse_output = QPushButton("เลือก Folder...")
+        browse_output.clicked.connect(self._choose_batch_output)
+        output_row.addWidget(self.batch_output_folder, 1)
+        output_row.addWidget(browse_output)
+        setup_row.addWidget(output_group, 2)
+        options_group = QGroupBox("Options")
+        options_row = QHBoxLayout(options_group)
+        self.recursive_input = QCheckBox("Recursive")
+        self.recursive_input.setChecked(True)
+        self.recursive_input.toggled.connect(self._recursive_toggled)
+        self.max_depth = QSpinBox()
+        self.max_depth.setRange(0, 50)
+        self.max_depth.setValue(10)
+        self.max_depth.setToolTip("0 = เฉพาะ folder นี้, 1 = ลงไป 1 ชั้น")
+        self.max_depth.setEnabled(self.recursive_input.isChecked())
+        options_row.addWidget(self.recursive_input)
+        options_row.addWidget(QLabel("ลึกไม่เกิน"))
+        options_row.addWidget(self.max_depth)
+        options_row.addWidget(QLabel("ชั้น"))
+        self.worker_count = QSpinBox()
+        self.worker_count.setRange(1, self._max_worker_limit())
+        self.worker_count.setValue(min(self._config.max_workers, self._max_worker_limit()))
+        self.worker_count.setToolTip("จำนวนไฟล์ที่ประมวลผลพร้อมกัน")
+        self.worker_count.valueChanged.connect(lambda _value: self._update_queue_summary())
+        options_row.addWidget(QLabel("Workers"))
+        options_row.addWidget(self.worker_count)
+        self.preserve_structure = QCheckBox("รักษาโครงสร้าง")
+        self.preserve_structure.setChecked(True)
+        self.preserve_structure.toggled.connect(self._batch_output_text_changed)
+        options_row.addWidget(self.preserve_structure)
+        setup_row.addWidget(options_group, 1)
+        layout.addLayout(setup_row)
+        self.queue_summary = QLabel("ยังไม่มีไฟล์ใน queue")
+        layout.addWidget(self.queue_summary)
+        self.queue_table = QTableWidget(0, 7)
+        self.queue_table.setHorizontalHeaderLabels(
+            ["#", "Input File", "Pages/Items", "Output File", "Progress", "Status", "Error"]
+        )
+        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.queue_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.queue_table.setAlternatingRowColors(True)
+        self.queue_table.setMinimumHeight(170)
+        self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.queue_table)
+        return panel
+
+    def _build_overlay_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        title = QLabel("OVERLAY ITEMS")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        delete = QPushButton("ลบรายการที่เลือก  (Delete)")
+        delete.clicked.connect(self._delete_selected)
+        layout.addWidget(delete)
+        self.overlay_list = QListWidget()
+        self.overlay_list.currentRowChanged.connect(self._select_overlay)
+        layout.addWidget(self.overlay_list, 1)
+        buttons = QHBoxLayout()
+        text_button = QPushButton("+ Text")
+        text_button.clicked.connect(lambda: self._add_overlay(OverlayType.TEXT))
+        logo_button = QPushButton("+ Logo")
+        logo_button.clicked.connect(lambda: self._add_overlay(OverlayType.IMAGE))
+        both_button = QPushButton("+ Text+Logo")
+        both_button.clicked.connect(self._add_text_and_logo)
+        buttons.addWidget(text_button)
+        buttons.addWidget(logo_button)
+        buttons.addWidget(both_button)
+        layout.addLayout(buttons)
+        return panel
+
+    def _build_preview_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        header = QHBoxLayout()
+        self.preview_title = QLabel("PDF Preview")
+        self.page_label = QLabel("หน้า 0 / 0")
+        header.addWidget(self.preview_title)
+        header.addStretch()
+        header.addWidget(self.page_label)
+        layout.addLayout(header)
+        self.preview = QGraphicsView(self._scene)
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setBackgroundBrush(QColor("#252a33"))
+        self.preview.setRenderHint(QPainter.RenderHint.Antialiasing)
+        layout.addWidget(self.preview, 1)
+        return panel
+
+    def _build_properties_panel(self) -> QWidget:
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        title = QLabel("PROPERTIES — รายการที่เลือก")
+        title.setObjectName("sectionTitle")
+        outer_layout.addWidget(title)
+        self.selected_item_label = QLabel("ยังไม่ได้เลือกรายการ")
+        outer_layout.addWidget(self.selected_item_label)
+        self.type_value = QLabel("—")
+        self.text_input = QLineEdit()
+        self.text_input.setPlaceholderText("พิมพ์ข้อความที่ต้องการวางบนไฟล์")
+        self.logo_button = QPushButton("เลือกไฟล์ Logo...")
+        self.logo_button.clicked.connect(self._choose_logo)
+        self.logo_value = QLabel("ยังไม่ได้เลือกไฟล์")
+        self.logo_value.setWordWrap(True)
+        self.position = QComboBox()
+        positions = [
+            ("บนซ้าย", Position.TOP_LEFT), ("บนกลาง", Position.TOP_CENTER),
+            ("บนขวา", Position.TOP_RIGHT), ("กลางซ้าย", Position.MIDDLE_LEFT),
+            ("กลาง", Position.MIDDLE_CENTER), ("กลางขวา", Position.MIDDLE_RIGHT),
+            ("ล่างซ้าย", Position.BOTTOM_LEFT), ("ล่างกลาง", Position.BOTTOM_CENTER),
+            ("ล่างขวา", Position.BOTTOM_RIGHT),
+        ]
+        for label, value in positions:
+            self.position.addItem(label, value)
+        self.font = QComboBox()
+        self.font.addItems(self._discover_fonts())
+        self.font_size = QSpinBox()
+        self.font_size.setRange(6, 240)
+        self.font_size.setValue(32)
+        self.logo_size = QSpinBox()
+        self.logo_size.setRange(1, 100)
+        self.logo_size.setValue(12)
+        self.opacity = QSlider(Qt.Orientation.Horizontal)
+        self.opacity.setRange(0, 100)
+        self.opacity.setValue(100)
+        self.opacity_label = QLabel("100%")
+        opacity_row = QHBoxLayout()
+        opacity_row.addWidget(self.opacity)
+        opacity_row.addWidget(self.opacity_label)
+        self.rotation = QSpinBox()
+        self.rotation.setRange(-360, 360)
+        self.rotation.setSuffix("°")
+        self.color_button = QPushButton("เลือกสี")
+        self.color_button.clicked.connect(self._choose_color)
+        self.properties_tabs = QTabWidget()
+        self.properties_tabs.setObjectName("propertiesTabs")
+        self.properties_tabs.addTab(
+            self._scrollable_form(
+                [
+                    ("ชนิด", self.type_value),
+                    ("ข้อความ", self.text_input),
+                    ("Logo", self.logo_button),
+                    ("ไฟล์", self.logo_value),
+                ]
+            ),
+            "Content",
+        )
+        self.properties_tabs.addTab(
+            self._scrollable_form(
+                [
+                    ("ตำแหน่งของรายการนี้", self.position),
+                    ("ขนาด Text ของรายการนี้", self.font_size),
+                    ("ขนาด Logo ของรายการนี้ (%)", self.logo_size),
+                    ("หมุนรายการนี้", self.rotation),
+                ]
+            ),
+            "Layout",
+        )
+        self.properties_tabs.addTab(
+            self._scrollable_form(
+                [
+                    ("Font", self.font),
+                    ("สีข้อความ", self.color_button),
+                    ("ความโปร่งใสของรายการนี้", opacity_row),
+                ]
+            ),
+            "Style",
+        )
+        outer_layout.addWidget(self.properties_tabs, 1)
+        self.text_input.textChanged.connect(self._property_changed)
+        self.position.currentIndexChanged.connect(self._property_changed)
+        self.font.currentIndexChanged.connect(self._property_changed)
+        self.font_size.valueChanged.connect(self._property_changed)
+        self.logo_size.valueChanged.connect(self._property_changed)
+        self.opacity.valueChanged.connect(self._property_changed)
+        self.rotation.valueChanged.connect(self._property_changed)
+        self._sync_property_controls(None)
+        return outer
+
+    def _scrollable_form(self, rows: list[tuple[str, QWidget | QHBoxLayout]]) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setObjectName("propertiesScroll")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        form = QFormLayout(content)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setVerticalSpacing(10)
+        for label, field in rows:
+            form.addRow(label, field)
+        scroll.setWidget(content)
+        return scroll
+
+    def _discover_fonts(self) -> list[str]:
+        directory = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+        return sorted(path.stem for path in directory.rglob("*.ttf")) or ["Arial"]
+
+    def _populate_queue(self, jobs: list[tuple[Path, Path]]) -> None:
+        self.queue_table.setRowCount(0)
+        for row, (source, destination) in enumerate(jobs):
+            self.queue_table.insertRow(row)
+            page_count = self._source_units(source)
+            values = [
+                str(row + 1),
+                source.name,
+                page_count,
+                str(destination) if str(destination) != "." else "—",
+                "0%",
+                "Pending",
+                "",
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column in (1, 3):
+                    item.setToolTip(value)
+                if column == 3 and str(destination) != ".":
+                    item.setData(Qt.ItemDataRole.UserRole, str(destination))
+                self.queue_table.setItem(row, column, item)
+            self.queue_table.item(row, 1).setData(Qt.ItemDataRole.UserRole, str(source))
+        self._update_queue_summary()
+        self._update_pipeline()
+
+    def _batch_output_text_changed(self) -> None:
+        output_text = self.batch_output_folder.text().strip()
+        if not output_text:
+            self._pending_batch_jobs = []
+            self.start_batch_action.setEnabled(False)
+            self._update_pipeline("เลือก Output Folder ก่อนเริ่มงาน")
+            return
+        output = Path(output_text)
+        if not self._is_valid_output_folder(output):
+            self._pending_batch_jobs = []
+            self.start_batch_action.setEnabled(False)
+            self.statusBar().showMessage(f"Output Folder ไม่ถูกต้อง: {output}")
+            self._update_pipeline("Output Folder ไม่ถูกต้อง")
+            return
+        sources = self._queue_sources()
+        if not sources:
+            self._preferences.output_folder = output
+            save_preferences(self._preferences)
+            self._update_pipeline("จำ Output Folder แล้ว")
+            return
+        self._apply_output_folder(output, "พร้อมเริ่ม Batch")
+
+    def _choose_batch_output(self) -> None:
+        initial = self.batch_output_folder.text().strip() or str(Path.home())
+        folder = QFileDialog.getExistingDirectory(self, "เลือก Output Folder", initial)
+        if not folder:
+            return
+        self._apply_output_folder(Path(folder), "Output Folder พร้อมแล้ว")
+
+    def _apply_output_folder(self, output: Path, summary: str) -> None:
+        self.batch_output_folder.setText(str(output))
+        self._preferences.output_folder = output
+        save_preferences(self._preferences)
+        sources = self._queue_sources()
+        if sources:
+            self._pending_batch_jobs = [
+                self._destination_for(source, output, self._input_root) for source in sources
+            ]
+            self._populate_queue(self._pending_batch_jobs)
+            self.start_batch_action.setEnabled(True)
+            self._update_queue_summary()
+        self._update_pipeline(summary)
+
+    def _recursive_toggled(self, checked: bool) -> None:
+        self.max_depth.setEnabled(checked)
+
+    def _choose_batch_input_folder(self) -> None:
+        initial = self.batch_input_folder.text().strip() or str(
+            self._preferences.pdf_folder or Path.home()
+        )
+        folder = QFileDialog.getExistingDirectory(self, "เลือก Input Folder", initial)
+        if not folder:
+            return
+        self.batch_input_folder.setText(folder)
+        self._load_input_folder_files()
+
+    def _load_input_folder_files(self) -> None:
+        input_text = self.batch_input_folder.text().strip()
+        if not input_text:
+            self.statusBar().showMessage("กรุณาเลือกหรือวาง Input Folder")
+            return
+        input_root = Path(input_text)
+        if not input_root.exists() or not input_root.is_dir():
+            self._pending_batch_jobs = []
+            self.start_batch_action.setEnabled(False)
+            self.statusBar().showMessage(f"Input Folder ไม่ถูกต้อง: {input_root}")
+            self._update_pipeline("Input Folder ไม่ถูกต้อง")
+            return
+        max_depth = self.max_depth.value() if self.recursive_input.isChecked() else 0
+        sources = discover_supported_files(
+            input_root,
+            recursive=self.recursive_input.isChecked(),
+            max_depth=max_depth,
+        )
+        if not sources:
+            self._pending_batch_jobs = []
+            self._populate_queue([])
+            self.start_batch_action.setEnabled(False)
+            self.statusBar().showMessage("ไม่พบ PDF/Image ใน Input Folder")
+            self._update_pipeline("ไม่พบไฟล์ที่รองรับ")
+            return
+        self._input_root = input_root
+        self._preferences.pdf_folder = input_root
+        save_preferences(self._preferences)
+        self._load_source(sources[0])
+        output_text = self.batch_output_folder.text().strip()
+        if not output_text or not self._is_valid_output_folder(Path(output_text)):
+            self._pending_batch_jobs = []
+            self._populate_queue([(source, Path()) for source in sources])
+            self.start_batch_action.setEnabled(False)
+            self._update_pipeline("โหลดไฟล์แล้ว — รอ Output Folder")
+            return
+        output = Path(output_text)
+        self._pending_batch_jobs = [
+            self._destination_for(source, output, input_root) for source in sources
+        ]
+        self._populate_queue(self._pending_batch_jobs)
+        self.start_batch_action.setEnabled(True)
+        self.statusBar().showMessage(
+            f"โหลดจาก Folder แล้ว {len(sources)} ไฟล์ — พร้อมเริ่ม Batch"
+        )
+        self._update_pipeline("พร้อมเริ่ม Batch")
+
+    def _queue_sources(self) -> list[Path]:
+        return [
+            Path(self.queue_table.item(row, 1).data(Qt.ItemDataRole.UserRole))
+            for row in range(self.queue_table.rowCount())
+        ]
+
+    def _queue_jobs_from_table(self) -> list[tuple[Path, Path]]:
+        jobs: list[tuple[Path, Path]] = []
+        for row in range(self.queue_table.rowCount()):
+            source_item = self.queue_table.item(row, 1)
+            destination_item = self.queue_table.item(row, 3)
+            if source_item is None or destination_item is None:
+                continue
+            source_data = source_item.data(Qt.ItemDataRole.UserRole)
+            destination_data = destination_item.data(Qt.ItemDataRole.UserRole)
+            if not source_data or not destination_data:
+                continue
+            jobs.append((Path(source_data), Path(destination_data)))
+        return jobs
+
+    def _refresh_batch_readiness(self) -> None:
+        self._pending_batch_jobs = self._queue_jobs_from_table()
+        is_running = self._worker is not None and self.cancel_action.isEnabled()
+        self.start_batch_action.setEnabled(bool(self._pending_batch_jobs) and not is_running)
+        self._update_queue_summary()
+
+    def _destination_for(
+        self,
+        source: Path,
+        output_folder: Path,
+        input_root: Path | None = None,
+    ) -> tuple[Path, Path]:
+        relative_parent = Path()
+        if self.preserve_structure.isChecked() and input_root is not None:
+            try:
+                relative_parent = source.resolve().parent.relative_to(input_root.resolve())
+            except ValueError:
+                relative_parent = Path()
+        return source, output_folder / relative_parent / f"{source.stem}-watermask{source.suffix}"
+
+    @staticmethod
+    def _is_valid_output_folder(output: Path) -> bool:
+        return output.exists() and output.is_dir()
+
+    @staticmethod
+    def _source_units(source: Path) -> str:
+        if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
+            return "1"
+        try:
+            with fitz.open(source) as document:
+                return str(document.page_count)
+        except Exception:
+            return "?"
+
+    def _queue_row_for_source(self, source_key: str) -> int | None:
+        for row in range(self.queue_table.rowCount()):
+            if self.queue_table.item(row, 1).data(Qt.ItemDataRole.UserRole) == source_key:
+                return row
+        return None
+
+    def _update_queue_file(self, source_key: str, status: str, progress: int) -> None:
+        row = self._queue_row_for_source(source_key)
+        if row is not None:
+            self.queue_table.item(row, 4).setText(f"{progress}%")
+            self.queue_table.item(row, 5).setText(status)
+            self._update_queue_summary()
+
+    def _update_queue_progress(self, source_key: str, current: int, total: int) -> None:
+        row = self._queue_row_for_source(source_key)
+        if row is None:
+            return
+        percent = int(current * 100 / total) if total else 0
+        self.queue_table.item(row, 4).setText(f"{percent}% ({current}/{total})")
+        if percent < 100:
+            self.queue_table.item(row, 5).setText("Processing")
+        self._update_queue_summary()
+
+    def _mark_active_rows_stopping(self) -> None:
+        for row in range(self.queue_table.rowCount()):
+            status_item = self.queue_table.item(row, 5)
+            if status_item is None or status_item.text() in {"Completed", "Failed"}:
+                continue
+            status_item.setText("Stopping")
+        self._update_queue_summary()
+
+    def _mark_unfinished_rows_cancelled(self) -> None:
+        for row in range(self.queue_table.rowCount()):
+            status_item = self.queue_table.item(row, 5)
+            if status_item is None or status_item.text() in {"Completed", "Failed"}:
+                continue
+            status_item.setText("Cancelled")
+        self._update_queue_summary()
+
+    def _remove_queue_rows(self) -> None:
+        if self._worker is not None and self.cancel_action.isEnabled():
+            QMessageBox.information(self, "กำลังประมวลผล", "หยุด Batch ก่อนลบรายการ")
+            return
+        rows = sorted({index.row() for index in self.queue_table.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        removed_sources = {
+            Path(self.queue_table.item(row, 1).data(Qt.ItemDataRole.UserRole)) for row in rows
+        }
+        for row in rows:
+            self.queue_table.removeRow(row)
+        self._pending_batch_jobs = [
+            job for job in self._pending_batch_jobs if job[0] not in removed_sources
+        ]
+        self.start_batch_action.setEnabled(bool(self._pending_batch_jobs))
+        self._update_queue_summary()
+        self._update_pipeline()
+
+    def _clear_queue(self) -> None:
+        if self._worker is not None and self.cancel_action.isEnabled():
+            QMessageBox.information(self, "กำลังประมวลผล", "หยุด Batch ก่อนล้าง Queue")
+            return
+        self.queue_table.setRowCount(0)
+        self._pending_batch_jobs.clear()
+        self._input_root = None
+        self.start_batch_action.setEnabled(False)
+        self._update_queue_summary()
+        self._update_pipeline("ล้าง Queue แล้ว")
+
+    def _font_path(self, name: str) -> Path | None:
+        directory = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+        return next(directory.rglob(f"{name}.ttf"), None)
+
+    def _preview_font(self, name: str, point_size: int) -> QFont:
+        family = self._preview_font_families.get(name)
+        if family is None:
+            font_path = self._font_path(name)
+            if font_path and font_path.exists():
+                font_id = QFontDatabase.addApplicationFont(str(font_path))
+                families = QFontDatabase.applicationFontFamilies(font_id)
+                family = families[0] if families else name
+            else:
+                family = name
+            self._preview_font_families[name] = family
+        return QFont(family, point_size)
+
+    def _select_input_files(self) -> None:
+        initial_folder = str(self._preferences.pdf_folder or Path.home())
+        dialog = QFileDialog(self, "เลือก PDF/Image File(s)", initial_folder)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+        dialog.setNameFilter("Supported files (*.pdf *.png *.jpg *.jpeg)")
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        if dialog.exec() != QFileDialog.DialogCode.Accepted:
+            return
+        sources = [
+            Path(path)
+            for path in dialog.selectedFiles()
+            if Path(path).suffix.lower() in SUPPORTED_INPUT_SUFFIXES
+        ]
+        if not sources:
+            return
+        self._input_root = None
+        self._preferences.pdf_folder = sources[0].parent
+        save_preferences(self._preferences)
+        if len(sources) == 1:
+            self._load_source(sources[0])
+            output_text = self.batch_output_folder.text().strip()
+            destination = (
+                self._destination_for(sources[0], Path(output_text))[1]
+                if output_text
+                else Path()
+            )
+            if output_text and self._is_valid_output_folder(Path(output_text)):
+                self._pending_batch_jobs = [(sources[0], destination)]
+                self.start_batch_action.setEnabled(True)
+                self.statusBar().showMessage(
+                    "พร้อมเริ่ม 1 ไฟล์ — กด Start Batch เพื่อเริ่ม"
+                )
+            else:
+                self._pending_batch_jobs = []
+                self.start_batch_action.setEnabled(False)
+            self._populate_queue([(sources[0], destination)])
+            self._update_pipeline()
+            return
+        self._load_source(sources[0])
+        output_text = self.batch_output_folder.text().strip()
+        if not output_text or not self._is_valid_output_folder(Path(output_text)):
+            self._pending_batch_jobs = []
+            self._populate_queue([(source, Path()) for source in sources])
+            self.start_batch_action.setEnabled(False)
+            self.statusBar().showMessage(
+                f"เลือกแล้ว {len(sources)} ไฟล์ — กรุณาตั้ง Output Folder ที่ถูกต้อง"
+            )
+            self._update_pipeline("เลือกไฟล์แล้ว — รอ Output Folder")
+            return
+        output_path = Path(output_text)
+        self._pending_batch_jobs = [
+            self._destination_for(source, output_path) for source in sources
+        ]
+        self._populate_queue(self._pending_batch_jobs)
+        self.start_batch_action.setEnabled(True)
+        self.statusBar().showMessage(
+            f"พร้อมเริ่ม Batch: {len(sources)} ไฟล์ → {output_path} | กด Start Batch"
+        )
+        self._update_pipeline("พร้อมเริ่ม Batch")
+
+    def _load_source(self, source_path: Path, preview_overlays: bool = True) -> None:
+        if source_path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
+            self._load_image(source_path, preview_overlays)
+        else:
+            self._load_pdf(source_path, preview_overlays)
+
+    def _load_pdf(self, pdf_path: Path, preview_overlays: bool = True) -> None:
+        try:
+            if self._document:
+                self._document.close()
+            self._document = fitz.open(pdf_path)
+            self._source_path = pdf_path
+            self._pdf_path = pdf_path
+            self._image_path = None
+            self._preview_bakes_overlays = preview_overlays
+            self.preview_title.setText(self._pdf_path.name)
+            self.page_label.setText(f"หน้า 1 / {self._document.page_count}")
+            self.statusBar().showMessage(f"เปิดไฟล์แล้ว: {self._pdf_path}")
+            self._refresh_preview()
+        except Exception as error:
+            QMessageBox.critical(self, "เปิด PDF ไม่สำเร็จ", str(error))
+
+    def _load_image(self, image_path: Path, preview_overlays: bool = True) -> None:
+        if self._document:
+            self._document.close()
+            self._document = None
+        self._source_path = image_path
+        self._pdf_path = None
+        self._image_path = image_path
+        self._preview_bakes_overlays = preview_overlays
+        self.preview_title.setText(image_path.name)
+        self.page_label.setText("รูปภาพ 1 / 1")
+        self.statusBar().showMessage(f"เปิดไฟล์แล้ว: {image_path}")
+        self._refresh_preview()
+
+    def _add_overlay(self, overlay_type: OverlayType) -> None:
+        asset_path = ""
+        if overlay_type is OverlayType.IMAGE:
+            asset_path, _ = QFileDialog.getOpenFileName(
+                self, "เลือก Logo", "", "Images (*.png *.jpg *.jpeg)"
+            )
+            if not asset_path:
+                return
+        self._append_overlay(overlay_type, asset_path)
+
+    def _add_text_and_logo(self) -> None:
+        asset_path, _ = QFileDialog.getOpenFileName(
+            self, "เลือก Logo", "", "Images (*.png *.jpg *.jpeg)"
+        )
+        if not asset_path:
+            return
+        self._append_overlay(OverlayType.TEXT)
+        self._append_overlay(OverlayType.IMAGE, asset_path)
+
+    def _append_overlay(self, overlay_type: OverlayType, asset_path: str = "") -> None:
+        number = len(self._overlays) + 1
+        item = {
+            "id": f"overlay-{number}", "type": overlay_type,
+            "position": (
+                Position.TOP_RIGHT
+                if overlay_type is OverlayType.IMAGE
+                else Position.MIDDLE_CENTER
+            ),
+            "opacity": 100, "rotation": 0, "font_size": 32,
+            "font": self.font.currentText(), "logo_size": 12,
+            "text": "ข้อความตัวอย่าง" if overlay_type is OverlayType.TEXT else "",
+            "asset_path": asset_path, "color": "#000000",
+        }
+        self._overlays.append(item)
+        label = "Text" if overlay_type is OverlayType.TEXT else "Logo"
+        list_item = QListWidgetItem(f"{label} {number}")
+        list_item.setData(Qt.ItemDataRole.UserRole, item["id"])
+        self.overlay_list.addItem(list_item)
+        self.overlay_list.setCurrentItem(list_item)
+        self._update_pipeline()
+
+    def _save_overlay_settings(self) -> None:
+        if not self._overlays:
+            QMessageBox.information(
+                self,
+                "ยังไม่มี Settings",
+                "กรุณาเพิ่ม Text หรือ Logo ก่อนบันทึก Settings",
+            )
+            return
+        initial = str(Path.home() / "mtpdflogo-settings.toml")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "บันทึก Overlay Settings",
+            initial,
+            "MTPDFLogo settings (*.toml)",
+        )
+        if not path:
+            return
+        target = Path(path)
+        if target.suffix.lower() != ".toml":
+            target = target.with_suffix(".toml")
+        save_overlay_preset(target, self._overlays)
+        self.statusBar().showMessage(f"บันทึก Settings แล้ว: {target}")
+
+    def _load_overlay_settings(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "โหลด Overlay Settings",
+            str(Path.home()),
+            "MTPDFLogo settings (*.toml)",
+        )
+        if not path:
+            return
+        try:
+            loaded = load_overlay_preset(Path(path))
+        except Exception as error:
+            QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
+            return
+        self._overlays = loaded
+        self._rebuild_overlay_list()
+        self._refresh_preview()
+        self.statusBar().showMessage(f"โหลด Settings แล้ว: {path}")
+        self._update_pipeline("โหลด Settings แล้ว")
+
+    def _rebuild_overlay_list(self) -> None:
+        self.overlay_list.clear()
+        for index, item in enumerate(self._overlays, 1):
+            label = "Text" if item["type"] is OverlayType.TEXT else "Logo"
+            list_item = QListWidgetItem(f"{label} {index}")
+            list_item.setData(Qt.ItemDataRole.UserRole, item["id"])
+            self.overlay_list.addItem(list_item)
+        if self.overlay_list.count():
+            self.overlay_list.setCurrentRow(0)
+
+    def _selected_model(self) -> dict[str, Any] | None:
+        current = self.overlay_list.currentItem()
+        if current is None:
+            return None
+        item_id = current.data(Qt.ItemDataRole.UserRole)
+        return next((item for item in self._overlays if item["id"] == item_id), None)
+
+    def _select_overlay(self, _row: int) -> None:
+        item = self._selected_model()
+        self._updating_properties = True
+        if item is None:
+            self.selected_item_label.setText("ยังไม่ได้เลือกรายการ")
+            self.type_value.setText("—")
+            self.text_input.clear()
+            self.logo_value.setText("ยังไม่ได้เลือกไฟล์")
+            self.opacity_label.setText("0%")
+            self.color_button.setText("เลือกสี")
+            self.color_button.setStyleSheet("")
+        else:
+            is_text = item["type"] is OverlayType.TEXT
+            selected = self.overlay_list.currentItem()
+            self.selected_item_label.setText(
+                f"กำลังแก้: {selected.text() if selected else item['id']}"
+            )
+            self.type_value.setText("Text" if is_text else "Logo")
+            self.text_input.setText(item["text"])
+            self.logo_value.setText(item["asset_path"] or "ยังไม่ได้เลือกไฟล์")
+            self.position.setCurrentIndex(self.position.findData(item["position"]))
+            if item["font"] and self.font.findText(item["font"]) < 0:
+                self.font.addItem(item["font"])
+            self.font.setCurrentText(item["font"])
+            self.font_size.setValue(item["font_size"])
+            self.logo_size.setValue(item["logo_size"])
+            self.opacity.setValue(item["opacity"])
+            self.opacity_label.setText(f"{item['opacity']}%")
+            self.rotation.setValue(item["rotation"])
+            self._set_color_button(item["color"])
+            self.properties_tabs.setCurrentIndex(0)
+        self._sync_property_controls(item)
+        self._updating_properties = False
+        self._refresh_preview()
+
+    def _sync_property_controls(self, item: dict[str, Any] | None) -> None:
+        has_item = item is not None
+        is_text = has_item and item["type"] is OverlayType.TEXT
+        is_logo = has_item and item["type"] is OverlayType.IMAGE
+        for control in (self.position, self.opacity, self.rotation):
+            control.setEnabled(has_item)
+        self.text_input.setEnabled(is_text)
+        self.font.setEnabled(is_text)
+        self.font_size.setEnabled(is_text)
+        self.color_button.setEnabled(is_text)
+        self.logo_button.setEnabled(is_logo)
+        self.logo_value.setEnabled(is_logo)
+        self.logo_size.setEnabled(is_logo)
+
+    def _set_color_button(self, color_name: str) -> None:
+        color = QColor(color_name)
+        red, green, blue = color.red(), color.green(), color.blue()
+        contrast = "#ffffff" if (red * 299 + green * 587 + blue * 114) < 128000 else "#000000"
+        self.color_button.setText(color_name)
+        self.color_button.setStyleSheet(
+            f"background-color: {color_name}; color: {contrast};"
+        )
+
+    def _property_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None:
+            return
+        position = self.position.currentData()
+        item.update(
+            text=self.text_input.text(), position=Position(str(position)),
+            font=self.font.currentText(), font_size=self.font_size.value(),
+            logo_size=self.logo_size.value(), opacity=self.opacity.value(),
+            rotation=self.rotation.value(),
+        )
+        self.opacity_label.setText(f"{self.opacity.value()}%")
+        self._refresh_preview()
+
+    def _choose_logo(self) -> None:
+        item = self._selected_model()
+        if item is None or item["type"] is not OverlayType.IMAGE:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "เลือก Logo", "", "Images (*.png *.jpg *.jpeg)")
+        if path:
+            item["asset_path"] = path
+            self.logo_value.setText(path)
+            self._refresh_preview()
+
+    def _choose_color(self) -> None:
+        item = self._selected_model()
+        if item is None or item["type"] is not OverlayType.TEXT:
+            return
+        color = QColorDialog.getColor(QColor(item["color"]), self, "เลือกสีข้อความ")
+        if color.isValid():
+            item["color"] = color.name()
+            self._set_color_button(color.name())
+            self._refresh_preview()
+
+    def _to_specs(self) -> list[PdfOverlaySpec]:
+        specs: list[PdfOverlaySpec] = []
+        for item in self._overlays:
+            color = QColor(item["color"])
+            specs.append(PdfOverlaySpec(
+                overlay_type=item["type"], position=item["position"], text=item["text"],
+                asset_path=Path(item["asset_path"]) if item["asset_path"] else None,
+                font_size=item["font_size"], font_path=self._font_path(item["font"]),
+                color=(color.redF(), color.greenF(), color.blueF()),
+                opacity=item["opacity"] / 100, rotation=item["rotation"],
+                width_percent=item["logo_size"],
+            ))
+        return specs
+
+    def _export_single(self) -> None:
+        if self._source_path is None:
+            QMessageBox.information(self, "ยังไม่ได้เปิดไฟล์", "กรุณาเลือกไฟล์ก่อน Export")
+            return
+        initial_folder = str(self._preferences.output_folder or self._source_path.parent)
+        output = QFileDialog.getExistingDirectory(self, "เลือก Output Folder", initial_folder)
+        if not output:
+            return
+        output_folder = Path(output)
+        self.batch_output_folder.setText(str(output_folder))
+        self._preferences.output_folder = output_folder
+        save_preferences(self._preferences)
+        destination = self._destination_for(self._source_path, output_folder)[1]
+        jobs = [(self._source_path, destination)]
+        self._populate_queue(jobs)
+        self._start_export(jobs)
+
+    def _start_pending_batch(self) -> None:
+        self._refresh_batch_readiness()
+        if not self._pending_batch_jobs:
+            return
+        jobs = list(self._pending_batch_jobs)
+        if self._start_export(jobs):
+            self.start_batch_action.setEnabled(False)
+            self._update_queue_summary()
+
+    def _start_export(self, jobs: list[tuple[Path, Path]]) -> bool:
+        batch_jobs = [BatchJob(source, destination) for source, destination in jobs]
+        issues = validate_jobs(batch_jobs)
+        if issues:
+            details = "\n".join(f"{issue.source}: {issue.message}" for issue in issues)
+            QMessageBox.warning(self, "Batch Preflight ไม่ผ่าน", details)
+            self._refresh_batch_readiness()
+            return False
+        self._last_export_jobs = jobs
+        self._thread = QThread(self)
+        manifest_path = jobs[0][1].parent / ".mtpdflogo-batch-status.json"
+        self._worker = ExportWorker(
+            jobs,
+            self._to_specs(),
+            manifest_path,
+            self.worker_count.value(),
+        )
+        self.cancel_action.setEnabled(True)
+        self._update_pipeline("กำลังประมวลผล")
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(lambda percent, name: self.statusBar().showMessage(
+            f"กำลังประมวลผล {percent}% — {name}"
+        ))
+        self._worker.file_failed.connect(
+            lambda name, error: self._show_file_error(name, error)
+        )
+        self._worker.file_updated.connect(self._update_queue_file)
+        self._worker.file_progress.connect(self._update_queue_progress)
+        self._worker.finished.connect(self._export_finished)
+        self._worker.failed.connect(self._export_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.finished.connect(self._export_thread_finished)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
+        return True
+
+    def _export_finished(self, message: str) -> None:
+        self.cancel_action.setEnabled(False)
+        if message.startswith("ยกเลิกแล้ว"):
+            self._mark_unfinished_rows_cancelled()
+        self._refresh_batch_readiness()
+        self.statusBar().showMessage(message)
+        if self._last_export_jobs:
+            output_preview = self._last_export_jobs[0][1]
+            if output_preview.exists():
+                self._load_source(output_preview, preview_overlays=False)
+                self.statusBar().showMessage(f"เสร็จสิ้น — Preview Output: {output_preview}")
+        self._update_pipeline("เสร็จสิ้น — ตรวจ Output ได้แล้ว")
+        QMessageBox.information(self, "เสร็จสิ้น", message)
+
+    def _export_failed(self, message: str) -> None:
+        self.cancel_action.setEnabled(False)
+        self._refresh_batch_readiness()
+        self.statusBar().showMessage("Export ไม่สำเร็จ")
+        self._update_pipeline("Export ไม่สำเร็จ")
+        QMessageBox.critical(self, "Export ไม่สำเร็จ", message)
+
+    def _cancel_export(self) -> None:
+        if self._worker is not None:
+            self._worker.cancel()
+            self._mark_active_rows_stopping()
+            self.statusBar().showMessage("กำลังหยุดหลังจากงานที่กำลังทำเสร็จ...")
+            self._update_pipeline("กำลังหยุด Batch")
+
+    def _export_thread_finished(self) -> None:
+        self._worker = None
+        self._thread = None
+
+    def _show_file_error(self, source_key: str, error: str) -> None:
+        self._update_queue_file(source_key, "Failed", 0)
+        row = self._queue_row_for_source(source_key)
+        if row is not None:
+            self.queue_table.item(row, 6).setText(error)
+        self.statusBar().showMessage(f"ข้าม {Path(source_key).name}: {error}")
+
+    def _delete_selected(self) -> None:
+        row = self.overlay_list.currentRow()
+        if row < 0:
+            return
+        item_id = self.overlay_list.item(row).data(Qt.ItemDataRole.UserRole)
+        self._overlays = [item for item in self._overlays if item["id"] != item_id]
+        self.overlay_list.takeItem(row)
+        self._refresh_preview()
+        self._update_pipeline()
+
+    def _refresh_preview(self) -> None:
+        self._scene.clear()
+        if self._image_path is not None:
+            pixmap = QPixmap(str(self._image_path))
+            if pixmap.isNull():
+                return
+            self._scene.addPixmap(pixmap)
+            if self._preview_bakes_overlays:
+                self._draw_preview_overlays(pixmap.width(), pixmap.height())
+            self._scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
+            self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            return
+        if self._document is None or self._document.page_count == 0:
+            return
+        page = self._document[0]
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.25, 1.25), alpha=False)
+        image = QImage(
+            pixmap.samples,
+            pixmap.width,
+            pixmap.height,
+            pixmap.stride,
+            QImage.Format.Format_RGB888,
+        ).copy()
+        self._scene.addPixmap(QPixmap.fromImage(image))
+        if not self._preview_bakes_overlays:
+            self._scene.setSceneRect(0, 0, pixmap.width, pixmap.height)
+            self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            return
+        self._draw_preview_overlays(pixmap.width, pixmap.height)
+        self._scene.setSceneRect(0, 0, pixmap.width, pixmap.height)
+        self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _draw_preview_overlays(self, preview_width: int, preview_height: int) -> None:
+        for item in self._overlays:
+            if item["type"] is OverlayType.TEXT:
+                graphic = QGraphicsTextItem(item["text"])
+                graphic.setDefaultTextColor(QColor(item["color"]))
+                graphic.setFont(self._preview_font(item["font"], item["font_size"]))
+                graphic.setOpacity(item["opacity"] / 100)
+                graphic.setRotation(item["rotation"])
+                text_rect = graphic.boundingRect()
+                x, y = self._preview_position(
+                    item["position"],
+                    text_rect.width(),
+                    text_rect.height(),
+                    preview_width,
+                    preview_height,
+                )
+                graphic.setPos(x, y)
+                self._scene.addItem(graphic)
+            elif item["asset_path"]:
+                logo = QPixmap(item["asset_path"])
+                if not logo.isNull():
+                    width = int(preview_width * item["logo_size"] / 100)
+                    scaled_logo = logo.scaledToWidth(
+                        width,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    graphic = self._scene.addPixmap(scaled_logo)
+                    graphic.setOpacity(item["opacity"] / 100)
+                    graphic.setRotation(item["rotation"])
+                    x, y = self._preview_position(
+                        item["position"],
+                        graphic.boundingRect().width(),
+                        graphic.boundingRect().height(),
+                        preview_width, preview_height,
+                    )
+                    graphic.setPos(x, y)
+
+    @staticmethod
+    def _preview_position(
+        position: Position,
+        width: float,
+        height: float,
+        page_width: float,
+        page_height: float,
+        margin: float = 20.0,
+    ) -> tuple[float, float]:
+        horizontal = {
+            Position.TOP_LEFT: margin,
+            Position.MIDDLE_LEFT: margin,
+            Position.BOTTOM_LEFT: margin,
+            Position.TOP_CENTER: (page_width - width) / 2,
+            Position.MIDDLE_CENTER: (page_width - width) / 2,
+            Position.BOTTOM_CENTER: (page_width - width) / 2,
+            Position.TOP_RIGHT: page_width - width - margin,
+            Position.MIDDLE_RIGHT: page_width - width - margin,
+            Position.BOTTOM_RIGHT: page_width - width - margin,
+        }[position]
+        vertical = {
+            Position.TOP_LEFT: margin,
+            Position.TOP_CENTER: margin,
+            Position.TOP_RIGHT: margin,
+            Position.MIDDLE_LEFT: (page_height - height) / 2,
+            Position.MIDDLE_CENTER: (page_height - height) / 2,
+            Position.MIDDLE_RIGHT: (page_height - height) / 2,
+            Position.BOTTOM_LEFT: page_height - height - margin,
+            Position.BOTTOM_CENTER: page_height - height - margin,
+            Position.BOTTOM_RIGHT: page_height - height - margin,
+        }[position]
+        return horizontal, vertical
+
+    def closeEvent(self, event: Any) -> None:
+        if self._document:
+            self._document.close()
+        event.accept()

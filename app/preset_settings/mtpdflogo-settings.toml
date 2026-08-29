@@ -1,0 +1,41 @@
+schema_version = 1
+application = "MTPDFLogo"
+
+[[overlays]]
+id = "overlay-1"
+type = "text"
+position = "bottom_center"
+text = "fb:BiiigBee Easy Maths"
+asset_path = ""
+font = "Mali-Bold"
+font_size = 32
+logo_size = 12
+opacity = 55
+rotation = -5
+color = "#000000"
+
+[[overlays]]
+id = "overlay-2"
+type = "image"
+position = "middle_center"
+text = ""
+asset_path = "G:/My Drive/tee/clip/BiiigBeeEasyMathsLogo - Edited.png"
+font = "Mali-Bold"
+font_size = 32
+logo_size = 35
+opacity = 34
+rotation = 0
+color = "#000000"
+
+[[overlays]]
+id = "overlay-3"
+type = "text"
+position = "top_center"
+text = "fb:BiiigBee Easy Maths"
+asset_path = ""
+font = "Mali-Bold"
+font_size = 32
+logo_size = 12
+opacity = 55
+rotation = -5
+color = "#ff0000"
