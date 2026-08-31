@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from mtpdflogo.config.overlay_preset import save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.presentation.main_window import MainWindow
@@ -14,6 +15,12 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QToolBar,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_preferences(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 
 
 def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
