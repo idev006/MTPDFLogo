@@ -27,9 +27,12 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsItem,
+    QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsTextItem,
     QGraphicsView,
@@ -67,6 +70,7 @@ from mtpdflogo.application.batch import (
     save_manifest,
     validate_jobs,
 )
+from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
 from mtpdflogo.config import (
     load_config,
     load_overlay_preset,
@@ -74,9 +78,58 @@ from mtpdflogo.config import (
     save_overlay_preset,
     save_preferences,
 )
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.image_overlay_service import apply_image_overlays
 from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, apply_overlays
+
+
+class DraggableTextItem(QGraphicsTextItem):
+    """Preview text item that reports its final dropped position."""
+
+    def __init__(self, text: str, overlay_id: str, owner: MainWindow) -> None:
+        super().__init__(text)
+        self.overlay_id = overlay_id
+        self.owner = owner
+        self._configure_drag_flags()
+
+    def _configure_drag_flags(self) -> None:
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mousePressEvent(self, event: Any) -> None:
+        self.owner._select_overlay_by_id(self.overlay_id)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        super().mouseReleaseEvent(event)
+        self.owner._preview_item_dropped(self.overlay_id, self)
+
+
+class DraggablePixmapItem(QGraphicsPixmapItem):
+    """Preview logo item that reports its final dropped position."""
+
+    def __init__(self, pixmap: QPixmap, overlay_id: str, owner: MainWindow) -> None:
+        super().__init__(pixmap)
+        self.overlay_id = overlay_id
+        self.owner = owner
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mousePressEvent(self, event: Any) -> None:
+        self.owner._select_overlay_by_id(self.overlay_id)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        super().mouseReleaseEvent(event)
+        self.owner._preview_item_dropped(self.overlay_id, self)
 
 
 def _process_file_job(
@@ -566,6 +619,21 @@ class MainWindow(QMainWindow):
         ]
         for label, value in positions:
             self.position.addItem(label, value)
+        self.position_mode = QComboBox()
+        self.position_mode.addItem("ตำแหน่งมาตรฐาน", PositionMode.PRESET)
+        self.position_mode.addItem("วางอิสระ", PositionMode.ABSOLUTE)
+        self.x_percent = QDoubleSpinBox()
+        self.x_percent.setRange(0.0, 100.0)
+        self.x_percent.setDecimals(2)
+        self.x_percent.setSuffix("%")
+        self.x_percent.setSingleStep(0.25)
+        self.y_percent = QDoubleSpinBox()
+        self.y_percent.setRange(0.0, 100.0)
+        self.y_percent.setDecimals(2)
+        self.y_percent.setSuffix("%")
+        self.y_percent.setSingleStep(0.25)
+        self.reset_to_preset = QPushButton("กลับไปใช้ตำแหน่งมาตรฐาน")
+        self.reset_to_preset.clicked.connect(self._reset_selected_to_preset)
         self.font = QComboBox()
         self.font.addItems(self._discover_fonts())
         self.font_size = QSpinBox()
@@ -603,6 +671,10 @@ class MainWindow(QMainWindow):
             self._scrollable_form(
                 [
                     ("ตำแหน่งของรายการนี้", self.position),
+                    ("โหมดตำแหน่ง", self.position_mode),
+                    ("X ของรายการนี้", self.x_percent),
+                    ("Y ของรายการนี้", self.y_percent),
+                    ("", self.reset_to_preset),
                     ("ขนาด Text ของรายการนี้", self.font_size),
                     ("ขนาด Logo ของรายการนี้ (%)", self.logo_size),
                     ("หมุนรายการนี้", self.rotation),
@@ -622,7 +694,10 @@ class MainWindow(QMainWindow):
         )
         outer_layout.addWidget(self.properties_tabs, 1)
         self.text_input.textChanged.connect(self._property_changed)
-        self.position.currentIndexChanged.connect(self._property_changed)
+        self.position.currentIndexChanged.connect(self._preset_position_changed)
+        self.position_mode.currentIndexChanged.connect(self._position_mode_changed)
+        self.x_percent.valueChanged.connect(self._absolute_position_changed)
+        self.y_percent.valueChanged.connect(self._absolute_position_changed)
         self.font.currentIndexChanged.connect(self._property_changed)
         self.font_size.valueChanged.connect(self._property_changed)
         self.logo_size.valueChanged.connect(self._property_changed)
@@ -1035,11 +1110,13 @@ class MainWindow(QMainWindow):
         number = len(self._overlays) + 1
         item = {
             "id": f"overlay-{number}", "type": overlay_type,
+            "position_mode": PositionMode.PRESET,
             "position": (
                 Position.TOP_RIGHT
                 if overlay_type is OverlayType.IMAGE
                 else Position.MIDDLE_CENTER
             ),
+            "x_percent": 50.0, "y_percent": 50.0,
             "opacity": 100, "rotation": 0, "font_size": 32,
             "font": self.font.currentText(), "logo_size": 12,
             "text": "ข้อความตัวอย่าง" if overlay_type is OverlayType.TEXT else "",
@@ -1113,6 +1190,14 @@ class MainWindow(QMainWindow):
         item_id = current.data(Qt.ItemDataRole.UserRole)
         return next((item for item in self._overlays if item["id"] == item_id), None)
 
+    def _select_overlay_by_id(self, overlay_id: str) -> None:
+        for row in range(self.overlay_list.count()):
+            list_item = self.overlay_list.item(row)
+            if list_item.data(Qt.ItemDataRole.UserRole) == overlay_id:
+                if self.overlay_list.currentRow() != row:
+                    self.overlay_list.setCurrentRow(row)
+                return
+
     def _select_overlay(self, _row: int) -> None:
         item = self._selected_model()
         self._updating_properties = True
@@ -1134,6 +1219,11 @@ class MainWindow(QMainWindow):
             self.text_input.setText(item["text"])
             self.logo_value.setText(item["asset_path"] or "ยังไม่ได้เลือกไฟล์")
             self.position.setCurrentIndex(self.position.findData(item["position"]))
+            self.position_mode.setCurrentIndex(
+                self.position_mode.findData(item.get("position_mode", PositionMode.PRESET))
+            )
+            self.x_percent.setValue(float(item.get("x_percent", 50.0)))
+            self.y_percent.setValue(float(item.get("y_percent", 50.0)))
             if item["font"] and self.font.findText(item["font"]) < 0:
                 self.font.addItem(item["font"])
             self.font.setCurrentText(item["font"])
@@ -1154,6 +1244,14 @@ class MainWindow(QMainWindow):
         is_logo = has_item and item["type"] is OverlayType.IMAGE
         for control in (self.position, self.opacity, self.rotation):
             control.setEnabled(has_item)
+        position_mode = (
+            item.get("position_mode", PositionMode.PRESET) if item else PositionMode.PRESET
+        )
+        is_absolute = has_item and position_mode is PositionMode.ABSOLUTE
+        self.position_mode.setEnabled(has_item)
+        self.x_percent.setEnabled(is_absolute)
+        self.y_percent.setEnabled(is_absolute)
+        self.reset_to_preset.setEnabled(is_absolute)
         self.text_input.setEnabled(is_text)
         self.font.setEnabled(is_text)
         self.font_size.setEnabled(is_text)
@@ -1187,6 +1285,60 @@ class MainWindow(QMainWindow):
         self.opacity_label.setText(f"{self.opacity.value()}%")
         self._refresh_preview()
 
+    def _preset_position_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None:
+            return
+        position = self.position.currentData()
+        item["position"] = Position(str(position))
+        item["position_mode"] = PositionMode.PRESET
+        self._updating_properties = True
+        self.position_mode.setCurrentIndex(self.position_mode.findData(PositionMode.PRESET))
+        self._updating_properties = False
+        self._sync_property_controls(item)
+        self._refresh_preview()
+
+    def _position_mode_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None:
+            return
+        mode = self.position_mode.currentData()
+        item["position_mode"] = PositionMode(str(mode))
+        item.setdefault("x_percent", self.x_percent.value())
+        item.setdefault("y_percent", self.y_percent.value())
+        self._sync_property_controls(item)
+        self._refresh_preview()
+
+    def _absolute_position_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None:
+            return
+        item["position_mode"] = PositionMode.ABSOLUTE
+        item["x_percent"] = self.x_percent.value()
+        item["y_percent"] = self.y_percent.value()
+        self._updating_properties = True
+        self.position_mode.setCurrentIndex(self.position_mode.findData(PositionMode.ABSOLUTE))
+        self._updating_properties = False
+        self._sync_property_controls(item)
+        self._refresh_preview()
+
+    def _reset_selected_to_preset(self) -> None:
+        item = self._selected_model()
+        if item is None:
+            return
+        item["position_mode"] = PositionMode.PRESET
+        self._updating_properties = True
+        self.position_mode.setCurrentIndex(self.position_mode.findData(PositionMode.PRESET))
+        self._updating_properties = False
+        self._sync_property_controls(item)
+        self._refresh_preview()
+
     def _choose_logo(self) -> None:
         item = self._selected_model()
         if item is None or item["type"] is not OverlayType.IMAGE:
@@ -1213,6 +1365,9 @@ class MainWindow(QMainWindow):
             color = QColor(item["color"])
             specs.append(PdfOverlaySpec(
                 overlay_type=item["type"], position=item["position"], text=item["text"],
+                position_mode=item.get("position_mode", PositionMode.PRESET),
+                x_percent=float(item.get("x_percent", 50.0)),
+                y_percent=float(item.get("y_percent", 50.0)),
                 asset_path=Path(item["asset_path"]) if item["asset_path"] else None,
                 font_size=item["font_size"], font_path=self._font_path(item["font"]),
                 color=(color.redF(), color.greenF(), color.blueF()),
@@ -1367,22 +1522,21 @@ class MainWindow(QMainWindow):
         self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _draw_preview_overlays(self, preview_width: int, preview_height: int) -> None:
+        selected = self._selected_model()
+        selected_id = selected["id"] if selected else None
         for item in self._overlays:
             if item["type"] is OverlayType.TEXT:
-                graphic = QGraphicsTextItem(item["text"])
+                graphic = DraggableTextItem(item["text"], item["id"], self)
                 graphic.setDefaultTextColor(QColor(item["color"]))
                 graphic.setFont(self._preview_font(item["font"], item["font_size"]))
                 graphic.setOpacity(item["opacity"] / 100)
                 graphic.setRotation(item["rotation"])
                 text_rect = graphic.boundingRect()
                 x, y = self._preview_position(
-                    item["position"],
-                    text_rect.width(),
-                    text_rect.height(),
-                    preview_width,
-                    preview_height,
+                    item, text_rect.width(), text_rect.height(), preview_width, preview_height
                 )
                 graphic.setPos(x, y)
+                graphic.setSelected(item["id"] == selected_id)
                 self._scene.addItem(graphic)
             elif item["asset_path"]:
                 logo = QPixmap(item["asset_path"])
@@ -1392,49 +1546,74 @@ class MainWindow(QMainWindow):
                         width,
                         Qt.TransformationMode.SmoothTransformation,
                     )
-                    graphic = self._scene.addPixmap(scaled_logo)
+                    graphic = DraggablePixmapItem(scaled_logo, item["id"], self)
                     graphic.setOpacity(item["opacity"] / 100)
                     graphic.setRotation(item["rotation"])
                     x, y = self._preview_position(
-                        item["position"],
+                        item,
                         graphic.boundingRect().width(),
                         graphic.boundingRect().height(),
-                        preview_width, preview_height,
+                        preview_width,
+                        preview_height,
                     )
                     graphic.setPos(x, y)
+                    graphic.setSelected(item["id"] == selected_id)
+                    self._scene.addItem(graphic)
 
-    @staticmethod
     def _preview_position(
-        position: Position,
+        self,
+        item: dict[str, Any],
         width: float,
         height: float,
         page_width: float,
         page_height: float,
         margin: float = 20.0,
     ) -> tuple[float, float]:
-        horizontal = {
-            Position.TOP_LEFT: margin,
-            Position.MIDDLE_LEFT: margin,
-            Position.BOTTOM_LEFT: margin,
-            Position.TOP_CENTER: (page_width - width) / 2,
-            Position.MIDDLE_CENTER: (page_width - width) / 2,
-            Position.BOTTOM_CENTER: (page_width - width) / 2,
-            Position.TOP_RIGHT: page_width - width - margin,
-            Position.MIDDLE_RIGHT: page_width - width - margin,
-            Position.BOTTOM_RIGHT: page_width - width - margin,
-        }[position]
-        vertical = {
-            Position.TOP_LEFT: margin,
-            Position.TOP_CENTER: margin,
-            Position.TOP_RIGHT: margin,
-            Position.MIDDLE_LEFT: (page_height - height) / 2,
-            Position.MIDDLE_CENTER: (page_height - height) / 2,
-            Position.MIDDLE_RIGHT: (page_height - height) / 2,
-            Position.BOTTOM_LEFT: page_height - height - margin,
-            Position.BOTTOM_CENTER: page_height - height - margin,
-            Position.BOTTOM_RIGHT: page_height - height - margin,
-        }[position]
-        return horizontal, vertical
+        return resolve_overlay_top_left(
+            page_width=page_width,
+            page_height=page_height,
+            overlay_width=width,
+            overlay_height=height,
+            position=item["position"],
+            position_mode=item.get("position_mode", PositionMode.PRESET),
+            x_percent=float(item.get("x_percent", 50.0)),
+            y_percent=float(item.get("y_percent", 50.0)),
+            margin=margin,
+        )
+
+    def _preview_item_dropped(
+        self,
+        overlay_id: str,
+        graphic: QGraphicsTextItem | QGraphicsPixmapItem,
+    ) -> None:
+        scene_rect = self._scene.sceneRect()
+        if scene_rect.width() <= 0 or scene_rect.height() <= 0:
+            return
+        item = next((overlay for overlay in self._overlays if overlay["id"] == overlay_id), None)
+        if item is None:
+            return
+        bounding = graphic.boundingRect()
+        center_x = graphic.pos().x() + bounding.width() / 2 - scene_rect.x()
+        center_y = graphic.pos().y() + bounding.height() / 2 - scene_rect.y()
+        x_percent, y_percent = point_to_percent(
+            x=center_x,
+            y=center_y,
+            page_width=scene_rect.width(),
+            page_height=scene_rect.height(),
+        )
+        item["position_mode"] = PositionMode.ABSOLUTE
+        item["x_percent"] = round(x_percent, 2)
+        item["y_percent"] = round(y_percent, 2)
+        self._select_overlay_by_id(overlay_id)
+        self._updating_properties = True
+        self.position_mode.setCurrentIndex(self.position_mode.findData(PositionMode.ABSOLUTE))
+        self.x_percent.setValue(item["x_percent"])
+        self.y_percent.setValue(item["y_percent"])
+        self._updating_properties = False
+        self._sync_property_controls(item)
+        self.statusBar().showMessage(
+            f"วางอิสระแล้ว: X {item['x_percent']:.2f}%, Y {item['y_percent']:.2f}%"
+        )
 
     def closeEvent(self, event: Any) -> None:
         if self._document:

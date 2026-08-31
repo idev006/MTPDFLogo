@@ -11,6 +11,11 @@ class OverlayType(StrEnum):
     IMAGE = "image"
 
 
+class PositionMode(StrEnum):
+    PRESET = "preset"
+    ABSOLUTE = "absolute"
+
+
 class Position(StrEnum):
     TOP_LEFT = "top_left"
     TOP_CENTER = "top_center"
@@ -30,6 +35,9 @@ class OverlayItem:
     id: str
     overlay_type: OverlayType
     position: Position
+    position_mode: PositionMode = PositionMode.PRESET
+    x_percent: float | None = None
+    y_percent: float | None = None
     opacity: float = 1.0
     rotation: float = 0.0
     margin_pt: float = 18.0
@@ -42,3 +50,10 @@ class OverlayItem:
             raise ValueError("opacity must be between 0.0 and 1.0")
         if self.margin_pt < 0:
             raise ValueError("margin_pt must not be negative")
+        if self.position_mode is PositionMode.ABSOLUTE:
+            if self.x_percent is None or self.y_percent is None:
+                raise ValueError("absolute position requires x_percent and y_percent")
+            if not 0.0 <= self.x_percent <= 100.0:
+                raise ValueError("x_percent must be between 0.0 and 100.0")
+            if not 0.0 <= self.y_percent <= 100.0:
+                raise ValueError("y_percent must be between 0.0 and 100.0")

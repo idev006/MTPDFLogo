@@ -8,9 +8,9 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
-PRESET_SCHEMA_VERSION = 1
+PRESET_SCHEMA_VERSION = 2
 
 
 def _quote(value: object) -> str:
@@ -31,7 +31,11 @@ def save_overlay_preset(path: Path, overlays: list[dict[str, Any]]) -> None:
                 "[[overlays]]",
                 f"id = {_quote(item.get('id') or f'overlay-{index}')}",
                 f"type = {_quote(_enum_value(item.get('type'), OverlayType.TEXT))}",
+                "position_mode = "
+                f"{_quote(_enum_value(item.get('position_mode'), PositionMode.PRESET))}",
                 f"position = {_quote(_enum_value(item.get('position'), Position.MIDDLE_CENTER))}",
+                f"x_percent = {_float_or_default(item.get('x_percent'), 50.0):.4f}",
+                f"y_percent = {_float_or_default(item.get('y_percent'), 50.0):.4f}",
                 f"text = {_quote(item.get('text', ''))}",
                 f"asset_path = {_quote(item.get('asset_path', ''))}",
                 f"font = {_quote(item.get('font', ''))}",
@@ -55,7 +59,8 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
     """Load text/logo overlay settings from a TOML preset file."""
     with path.open("rb") as preset_file:
         data = tomllib.load(preset_file)
-    if int(data.get("schema_version", 0)) != PRESET_SCHEMA_VERSION:
+    schema_version = int(data.get("schema_version", 0))
+    if schema_version not in {1, PRESET_SCHEMA_VERSION}:
         raise ValueError("unsupported overlay preset schema version")
     overlays: list[dict[str, Any]] = []
     for index, raw_item in enumerate(data.get("overlays", []), 1):
@@ -65,11 +70,17 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
             if overlay_type is OverlayType.IMAGE
             else Position.MIDDLE_CENTER
         )
+        position_mode = PositionMode(
+            str(raw_item.get("position_mode", PositionMode.PRESET.value))
+        )
         overlays.append(
             {
                 "id": str(raw_item.get("id") or f"overlay-{index}"),
                 "type": overlay_type,
+                "position_mode": position_mode,
                 "position": Position(str(raw_item.get("position", default_position.value))),
+                "x_percent": _bounded_float(raw_item.get("x_percent", 50.0), 0.0, 100.0),
+                "y_percent": _bounded_float(raw_item.get("y_percent", 50.0), 0.0, 100.0),
                 "opacity": _bounded_int(raw_item.get("opacity", 100), 0, 100),
                 "rotation": _bounded_int(raw_item.get("rotation", 0), -360, 360),
                 "font_size": _bounded_int(raw_item.get("font_size", 32), 6, 240),
@@ -83,8 +94,8 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
     return overlays
 
 
-def _enum_value(value: object, default: OverlayType | Position) -> str:
-    if isinstance(value, OverlayType | Position):
+def _enum_value(value: object, default: OverlayType | Position | PositionMode) -> str:
+    if isinstance(value, OverlayType | Position | PositionMode):
         return value.value
     return str(value or default.value)
 
@@ -95,3 +106,18 @@ def _bounded_int(value: object, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         number = minimum
     return max(minimum, min(maximum, number))
+
+
+def _bounded_float(value: object, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = minimum
+    return max(minimum, min(maximum, number))
+
+
+def _float_or_default(value: object, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

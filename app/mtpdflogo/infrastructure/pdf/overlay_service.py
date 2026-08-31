@@ -11,13 +11,17 @@ from pathlib import Path
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.application.positioning import resolve_overlay_top_left
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
 
 @dataclass(frozen=True, slots=True)
 class PdfOverlaySpec:
     overlay_type: OverlayType
     position: Position
+    position_mode: PositionMode = PositionMode.PRESET
+    x_percent: float | None = None
+    y_percent: float | None = None
     text: str = ""
     asset_path: Path | None = None
     font_size: float = 32.0
@@ -33,33 +37,25 @@ class PdfOverlaySpec:
 
 def _anchor_rect(
     page_rect: fitz.Rect,
+    spec: PdfOverlaySpec,
     position: Position,
     width: float,
     height: float,
     margin: float,
 ) -> fitz.Rect:
-    horizontal = {
-        Position.TOP_LEFT: page_rect.x0 + margin,
-        Position.MIDDLE_LEFT: page_rect.x0 + margin,
-        Position.BOTTOM_LEFT: page_rect.x0 + margin,
-        Position.TOP_CENTER: page_rect.x0 + (page_rect.width - width) / 2,
-        Position.MIDDLE_CENTER: page_rect.x0 + (page_rect.width - width) / 2,
-        Position.BOTTOM_CENTER: page_rect.x0 + (page_rect.width - width) / 2,
-        Position.TOP_RIGHT: page_rect.x1 - margin - width,
-        Position.MIDDLE_RIGHT: page_rect.x1 - margin - width,
-        Position.BOTTOM_RIGHT: page_rect.x1 - margin - width,
-    }[position]
-    vertical = {
-        Position.TOP_LEFT: page_rect.y0 + margin,
-        Position.TOP_CENTER: page_rect.y0 + margin,
-        Position.TOP_RIGHT: page_rect.y0 + margin,
-        Position.MIDDLE_LEFT: page_rect.y0 + (page_rect.height - height) / 2,
-        Position.MIDDLE_CENTER: page_rect.y0 + (page_rect.height - height) / 2,
-        Position.MIDDLE_RIGHT: page_rect.y0 + (page_rect.height - height) / 2,
-        Position.BOTTOM_LEFT: page_rect.y1 - margin - height,
-        Position.BOTTOM_CENTER: page_rect.y1 - margin - height,
-        Position.BOTTOM_RIGHT: page_rect.y1 - margin - height,
-    }[position]
+    x, y = resolve_overlay_top_left(
+        page_width=page_rect.width,
+        page_height=page_rect.height,
+        overlay_width=width,
+        overlay_height=height,
+        position=position,
+        position_mode=spec.position_mode,
+        x_percent=spec.x_percent,
+        y_percent=spec.y_percent,
+        margin=margin,
+    )
+    horizontal = page_rect.x0 + x
+    vertical = page_rect.y0 + y
     return fitz.Rect(horizontal, vertical, horizontal + width, vertical + height)
 
 
@@ -69,7 +65,7 @@ def _apply_text(page: fitz.Page, page_rect: fitz.Rect, spec: PdfOverlaySpec) -> 
         return
     width = page_rect.width * 0.45
     height = max(spec.font_size * 2.5, 40)
-    rect = _anchor_rect(page_rect, spec.position, width, height, spec.margin_pt)
+    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
     kwargs = {
         "fontsize": spec.font_size,
         "fontname": "helv",
@@ -113,7 +109,7 @@ def _apply_rotated_text_as_image(
     image.save(stream, format="PNG")
     width = image.width / scale
     height = image.height / scale
-    rect = _anchor_rect(page_rect, spec.position, width, height, spec.margin_pt)
+    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
     page.insert_image(rect, stream=stream.getvalue(), overlay=True)
 
 
@@ -135,7 +131,7 @@ def _apply_image(
         aspect = image.height / image.width
     width = page_rect.width * spec.width_percent / 100
     height = width * aspect
-    rect = _anchor_rect(page_rect, spec.position, width, height, spec.margin_pt)
+    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
     cache_key = (spec.asset_path, round(spec.opacity, 4), spec.rotation)
     xref = image_xrefs.get(cache_key)
     if xref is None:

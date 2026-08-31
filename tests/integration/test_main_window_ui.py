@@ -1,10 +1,17 @@
 from pathlib import Path
 
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.presentation.main_window import MainWindow
 from PIL import Image
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGroupBox, QMessageBox, QSplitter, QTabWidget, QToolBar
+from PySide6.QtWidgets import (
+    QGraphicsTextItem,
+    QGroupBox,
+    QMessageBox,
+    QSplitter,
+    QTabWidget,
+    QToolBar,
+)
 
 
 def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
@@ -58,6 +65,51 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
+
+
+def test_layout_tab_supports_absolute_position_controls(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._append_overlay(OverlayType.TEXT)
+
+    assert window.position_mode.currentData() == PositionMode.PRESET
+    assert not window.x_percent.isEnabled()
+    assert not window.y_percent.isEnabled()
+
+    window.position_mode.setCurrentIndex(window.position_mode.findData(PositionMode.ABSOLUTE))
+
+    assert window._overlays[0]["position_mode"] is PositionMode.ABSOLUTE
+    assert window.x_percent.isEnabled()
+    assert window.y_percent.isEnabled()
+
+    window.x_percent.setValue(42.5)
+    window.y_percent.setValue(12.25)
+
+    assert window._overlays[0]["x_percent"] == 42.5
+    assert window._overlays[0]["y_percent"] == 12.25
+
+    window.reset_to_preset.click()
+
+    assert window._overlays[0]["position_mode"] is PositionMode.PRESET
+
+
+def test_preview_drop_updates_only_dragged_item_to_absolute(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    window._append_overlay(OverlayType.IMAGE, "")
+    dragged = QGraphicsTextItem("dragged")
+    dragged.setPos(90, 190)
+    window._scene.setSceneRect(0, 0, 200, 400)
+
+    window._preview_item_dropped("overlay-1", dragged)
+
+    assert window._overlays[0]["position_mode"] is PositionMode.ABSOLUTE
+    assert 40 <= window._overlays[0]["x_percent"] <= 60
+    assert 45 <= window._overlays[0]["y_percent"] <= 55
+    assert window._overlays[1]["position_mode"] is PositionMode.PRESET
+    assert window.position_mode.currentData() == PositionMode.ABSOLUTE
 
 
 def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) -> None:

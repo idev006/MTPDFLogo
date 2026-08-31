@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from mtpdflogo.config.overlay_preset import load_overlay_preset, save_overlay_preset
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
 
 def test_overlay_preset_round_trip_as_toml(tmp_path: Path) -> None:
@@ -10,7 +10,10 @@ def test_overlay_preset_round_trip_as_toml(tmp_path: Path) -> None:
         {
             "id": "text-1",
             "type": OverlayType.TEXT,
+            "position_mode": PositionMode.ABSOLUTE,
             "position": Position.MIDDLE_CENTER,
+            "x_percent": 44.25,
+            "y_percent": 18.5,
             "opacity": 54,
             "rotation": -30,
             "font_size": 32,
@@ -23,7 +26,10 @@ def test_overlay_preset_round_trip_as_toml(tmp_path: Path) -> None:
         {
             "id": "logo-1",
             "type": OverlayType.IMAGE,
+            "position_mode": PositionMode.PRESET,
             "position": Position.TOP_RIGHT,
+            "x_percent": 50.0,
+            "y_percent": 50.0,
             "opacity": 75,
             "rotation": 15,
             "font_size": 20,

@@ -13,6 +13,8 @@
 - Font bundle อยู่ที่ `app/assets/fonts/`
 - ผู้ใช้เพิ่ม Text, Logo หรือทั้งสองชนิดได้หลายรายการ
 - แต่ละรายการตั้งค่าแยกกันได้อย่างอิสระ
+- ผู้ใช้ต้องวาง Text/Logo ได้ 2 วิธี: เลือกตำแหน่งมาตรฐานจาก dropdown 9 จุด หรือ drag-and-drop วางอิสระบน preview
+- ตำแหน่งแบบ drag-and-drop ต้องเก็บเป็น absolute percent ของหน้า (`x_percent`, `y_percent`) ไม่ใช่ screen pixel
 - UI ต้องมีทางเลือกที่ชัดเจนสำหรับเพิ่ม Text+Logo พร้อมกันใน workflow เดียว
 - ประมวลผลหลาย PDF/รูปภาพแบบแยกไฟล์ ไม่รวม PDF
 - รองรับ PDF แนวตั้ง แนวนอน และเอกสารที่มี orientation ผสมกันภายในไฟล์เดียว
@@ -89,6 +91,8 @@
 - Overlay model คือ `OverlayItem` หนึ่งรายการต่อหนึ่ง Text หรือ Logo
 - Overlay preset เป็นไฟล์ TOML มี schema version และเก็บค่าของ Text/Logo แต่ละรายการแยกกัน
 - Position ใช้ preset 9 จุด พร้อม offset/margin
+- Position mode มี 2 แบบ: `preset` สำหรับ dropdown และ `absolute` สำหรับ drag-and-drop/free position
+- Absolute position ใช้ anchor center ใน MVP และต้องคำนวณจากขนาดหน้าจริงของ PDF/Image แต่ละหน้า
 - ตำแหน่งต้องคำนวณใหม่จาก `page.rect` ของแต่ละหน้า ห้ามใช้ขนาดหน้าคงที่
 - Opacity ใช้ช่วง 0.0–1.0
 - Font discovery จะอ่านจาก configured font directory
