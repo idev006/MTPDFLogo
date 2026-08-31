@@ -25,6 +25,7 @@
 - ผู้ใช้ตั้งค่า output folder แยกต่างหาก และระบบต้องจำ path ล่าสุดไว้เพื่อความสะดวก
 - ผู้ใช้ตั้งค่า output folder ได้ 2 วิธี: กด `เลือก Folder...` หรือวาง path ลง textbox
 - ผู้ใช้ต้องบันทึก/โหลดชุด Overlay Settings เป็นไฟล์ TOML ได้
+- โปรแกรมต้องจำ folder ล่าสุดที่ผู้ใช้ใช้ Save/Load Overlay Settings โดยแยกจาก PDF folder และ output folder
 - Batch output ต้องเป็นหนึ่ง output ต่อหนึ่ง input และรักษาโครงสร้าง subfolder ได้เมื่อเลือกใช้
 - ในแต่ละไฟล์ประมวลผลทีละหน้าและใช้ parallel ระดับไฟล์
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI

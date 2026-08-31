@@ -1138,7 +1138,8 @@ class MainWindow(QMainWindow):
                 "กรุณาเพิ่ม Text หรือ Logo ก่อนบันทึก Settings",
             )
             return
-        initial = str(Path.home() / "mtpdflogo-settings.toml")
+        initial_folder = self._settings_initial_folder()
+        initial = str(initial_folder / "mtpdflogo-settings.toml")
         path, _ = QFileDialog.getSaveFileName(
             self,
             "บันทึก Overlay Settings",
@@ -1151,13 +1152,16 @@ class MainWindow(QMainWindow):
         if target.suffix.lower() != ".toml":
             target = target.with_suffix(".toml")
         save_overlay_preset(target, self._overlays)
+        self._preferences.settings_folder = target.parent
+        save_preferences(self._preferences)
         self.statusBar().showMessage(f"บันทึก Settings แล้ว: {target}")
 
     def _load_overlay_settings(self) -> None:
+        initial_folder = self._settings_initial_folder()
         path, _ = QFileDialog.getOpenFileName(
             self,
             "โหลด Overlay Settings",
-            str(Path.home()),
+            str(initial_folder),
             "MTPDFLogo settings (*.toml)",
         )
         if not path:
@@ -1167,11 +1171,20 @@ class MainWindow(QMainWindow):
         except Exception as error:
             QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
             return
+        source = Path(path)
+        self._preferences.settings_folder = source.parent
+        save_preferences(self._preferences)
         self._overlays = loaded
         self._rebuild_overlay_list()
         self._refresh_preview()
         self.statusBar().showMessage(f"โหลด Settings แล้ว: {path}")
         self._update_pipeline("โหลด Settings แล้ว")
+
+    def _settings_initial_folder(self) -> Path:
+        folder = self._preferences.settings_folder
+        if folder and folder.exists() and folder.is_dir():
+            return folder
+        return Path.home()
 
     def _rebuild_overlay_list(self) -> None:
         self.overlay_list.clear()

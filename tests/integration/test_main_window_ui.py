@@ -1,10 +1,12 @@
 from pathlib import Path
 
+from mtpdflogo.config.overlay_preset import save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.presentation.main_window import MainWindow
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFileDialog,
     QGraphicsTextItem,
     QGroupBox,
     QMessageBox,
@@ -110,6 +112,138 @@ def test_preview_drop_updates_only_dragged_item_to_absolute(qtbot) -> None:
     assert 45 <= window._overlays[0]["y_percent"] <= 55
     assert window._overlays[1]["position_mode"] is PositionMode.PRESET
     assert window.position_mode.currentData() == PositionMode.ABSOLUTE
+
+
+def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypatch) -> None:
+    remembered = tmp_path / "remembered"
+    pdf_folder = tmp_path / "pdfs"
+    output_folder = tmp_path / "outputs"
+    remembered.mkdir()
+    pdf_folder.mkdir()
+    output_folder.mkdir()
+    target = remembered / "team-preset.toml"
+    captured: dict[str, str] = {}
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.pdf_folder = pdf_folder
+    window._preferences.output_folder = output_folder
+    window._preferences.settings_folder = remembered
+    window._append_overlay(OverlayType.TEXT)
+
+    def fake_save_dialog(*args) -> tuple[str, str]:
+        captured["initial"] = args[2]
+        return str(target), "MTPDFLogo settings (*.toml)"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_save_dialog)
+
+    window._save_overlay_settings()
+
+    assert captured["initial"] == str(remembered / "mtpdflogo-settings.toml")
+    assert window._preferences.settings_folder == remembered
+    assert window._preferences.pdf_folder == pdf_folder
+    assert window._preferences.output_folder == output_folder
+    assert target.exists()
+
+
+def test_load_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypatch) -> None:
+    remembered = tmp_path / "remembered"
+    next_folder = tmp_path / "next"
+    pdf_folder = tmp_path / "pdfs"
+    output_folder = tmp_path / "outputs"
+    remembered.mkdir()
+    next_folder.mkdir()
+    pdf_folder.mkdir()
+    output_folder.mkdir()
+    source = next_folder / "loaded.toml"
+    save_overlay_preset(
+        source,
+        [
+            {
+                "id": "text-1",
+                "type": OverlayType.TEXT,
+                "position_mode": PositionMode.ABSOLUTE,
+                "position": Position.MIDDLE_CENTER,
+                "x_percent": 25.0,
+                "y_percent": 35.0,
+                "opacity": 100,
+                "rotation": 0,
+                "font_size": 32,
+                "font": "Mali-Bold",
+                "logo_size": 12,
+                "text": "loaded",
+                "asset_path": "",
+                "color": "#000000",
+            }
+        ],
+    )
+    captured: dict[str, str] = {}
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.pdf_folder = pdf_folder
+    window._preferences.output_folder = output_folder
+    window._preferences.settings_folder = remembered
+
+    def fake_open_dialog(*args) -> tuple[str, str]:
+        captured["initial"] = args[2]
+        return str(source), "MTPDFLogo settings (*.toml)"
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", fake_open_dialog)
+
+    window._load_overlay_settings()
+
+    assert captured["initial"] == str(remembered)
+    assert window._preferences.settings_folder == next_folder
+    assert window._preferences.pdf_folder == pdf_folder
+    assert window._preferences.output_folder == output_folder
+    assert window._overlays[0]["text"] == "loaded"
+
+
+def test_cancelled_settings_dialog_keeps_preferences(qtbot, tmp_path, monkeypatch) -> None:
+    remembered = tmp_path / "remembered"
+    pdf_folder = tmp_path / "pdfs"
+    output_folder = tmp_path / "outputs"
+    remembered.mkdir()
+    pdf_folder.mkdir()
+    output_folder.mkdir()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.pdf_folder = pdf_folder
+    window._preferences.output_folder = output_folder
+    window._preferences.settings_folder = remembered
+    window._append_overlay(OverlayType.TEXT)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: ("", ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: ("", ""))
+
+    window._save_overlay_settings()
+    window._load_overlay_settings()
+
+    assert window._preferences.settings_folder == remembered
+    assert window._preferences.pdf_folder == pdf_folder
+    assert window._preferences.output_folder == output_folder
+
+
+def test_invalid_loaded_settings_keeps_settings_folder(qtbot, tmp_path, monkeypatch) -> None:
+    remembered = tmp_path / "remembered"
+    remembered.mkdir()
+    bad_file = tmp_path / "bad.toml"
+    bad_file.write_text("not valid toml = [", encoding="utf-8")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.settings_folder = remembered
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(bad_file), ""))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
+
+    window._load_overlay_settings()
+
+    assert window._preferences.settings_folder == remembered
+
+
+def test_missing_settings_folder_falls_back_to_home(qtbot, tmp_path) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.settings_folder = tmp_path / "missing"
+
+    assert window._settings_initial_folder() == Path.home()
 
 
 def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) -> None:

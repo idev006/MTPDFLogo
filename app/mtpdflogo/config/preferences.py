@@ -14,6 +14,7 @@ from pathlib import Path
 class UserPreferences:
     pdf_folder: Path | None = None
     output_folder: Path | None = None
+    settings_folder: Path | None = None
 
 
 def preferences_path() -> Path:
@@ -37,6 +38,7 @@ def load_preferences(path: Path | None = None) -> UserPreferences:
     return UserPreferences(
         pdf_folder=Path(paths["pdf_folder"]) if paths.get("pdf_folder") else None,
         output_folder=Path(paths["output_folder"]) if paths.get("output_folder") else None,
+        settings_folder=Path(paths["settings_folder"]) if paths.get("settings_folder") else None,
     )
 
 
@@ -47,9 +49,17 @@ def save_preferences(preferences: UserPreferences, path: Path | None = None) -> 
     output_folder = json.dumps(
         str(preferences.output_folder) if preferences.output_folder else ""
     )
+    settings_folder = json.dumps(
+        str(preferences.settings_folder) if preferences.settings_folder else ""
+    )
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", suffix=".tmp", dir=path.parent, delete=False
     ) as temporary:
         temporary_path = Path(temporary.name)
-        temporary.write(f"[paths]\npdf_folder = {pdf_folder}\noutput_folder = {output_folder}\n")
+        temporary.write(
+            "[paths]\n"
+            f"pdf_folder = {pdf_folder}\n"
+            f"output_folder = {output_folder}\n"
+            f"settings_folder = {settings_folder}\n"
+        )
     temporary_path.replace(path)
