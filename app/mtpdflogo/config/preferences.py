@@ -15,6 +15,7 @@ class UserPreferences:
     pdf_folder: Path | None = None
     output_folder: Path | None = None
     settings_folder: Path | None = None
+    open_output_folder_on_finish: bool = False
 
 
 def preferences_path() -> Path:
@@ -35,10 +36,14 @@ def load_preferences(path: Path | None = None) -> UserPreferences:
     except (OSError, tomllib.TOMLDecodeError):
         return UserPreferences()
     paths = data.get("paths", {})
+    behavior = data.get("behavior", {})
     return UserPreferences(
         pdf_folder=Path(paths["pdf_folder"]) if paths.get("pdf_folder") else None,
         output_folder=Path(paths["output_folder"]) if paths.get("output_folder") else None,
         settings_folder=Path(paths["settings_folder"]) if paths.get("settings_folder") else None,
+        open_output_folder_on_finish=bool(
+            behavior.get("open_output_folder_on_finish", False)
+        ),
     )
 
 
@@ -61,5 +66,8 @@ def save_preferences(preferences: UserPreferences, path: Path | None = None) -> 
             f"pdf_folder = {pdf_folder}\n"
             f"output_folder = {output_folder}\n"
             f"settings_folder = {settings_folder}\n"
+            "\n[behavior]\n"
+            "open_output_folder_on_finish = "
+            f"{str(preferences.open_output_folder_on_finish).lower()}\n"
         )
     temporary_path.replace(path)

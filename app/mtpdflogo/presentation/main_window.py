@@ -11,9 +11,10 @@ from queue import Empty
 from typing import Any
 
 import fitz
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
+    QDesktopServices,
     QFont,
     QFontDatabase,
     QImage,
@@ -534,6 +535,17 @@ class MainWindow(QMainWindow):
         self.preserve_structure.setChecked(True)
         self.preserve_structure.toggled.connect(self._batch_output_text_changed)
         options_row.addWidget(self.preserve_structure)
+        self.open_output_folder_on_finish = QCheckBox("เปิด Output เมื่อเสร็จ")
+        self.open_output_folder_on_finish.setChecked(
+            self._preferences.open_output_folder_on_finish
+        )
+        self.open_output_folder_on_finish.setToolTip(
+            "เปิดโฟลเดอร์ปลายทางอัตโนมัติเมื่อ Batch สำเร็จ"
+        )
+        self.open_output_folder_on_finish.toggled.connect(
+            self._open_output_folder_preference_changed
+        )
+        options_row.addWidget(self.open_output_folder_on_finish)
         setup_row.addWidget(options_group, 1)
         layout.addLayout(setup_row)
         self.queue_summary = QLabel("ยังไม่มีไฟล์ใน queue")
@@ -794,6 +806,10 @@ class MainWindow(QMainWindow):
 
     def _recursive_toggled(self, checked: bool) -> None:
         self.max_depth.setEnabled(checked)
+
+    def _open_output_folder_preference_changed(self, checked: bool) -> None:
+        self._preferences.open_output_folder_on_finish = checked
+        save_preferences(self._preferences)
 
     def _choose_batch_input_folder(self) -> None:
         initial = self.batch_input_folder.text().strip() or str(
@@ -1464,8 +1480,21 @@ class MainWindow(QMainWindow):
             if output_preview.exists():
                 self._load_source(output_preview, preview_overlays=False)
                 self.statusBar().showMessage(f"เสร็จสิ้น — Preview Output: {output_preview}")
+        if self._is_successful_finish_message(message):
+            self._open_finished_output_folder()
         self._update_pipeline("เสร็จสิ้น — ตรวจ Output ได้แล้ว")
         QMessageBox.information(self, "เสร็จสิ้น", message)
+
+    @staticmethod
+    def _is_successful_finish_message(message: str) -> bool:
+        return message.startswith("สำเร็จ") and "ล้มเหลว 0 ไฟล์" in message
+
+    def _open_finished_output_folder(self) -> None:
+        if not self.open_output_folder_on_finish.isChecked() or not self._last_export_jobs:
+            return
+        output_folder = self._last_export_jobs[0][1].parent
+        if output_folder.exists() and output_folder.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_folder)))
 
     def _export_failed(self, message: str) -> None:
         self.cancel_action.setEnabled(False)

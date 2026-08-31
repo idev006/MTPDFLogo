@@ -64,6 +64,7 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.queue_table.minimumHeight() >= 170
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
     assert window.worker_count.value() >= 1
+    assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
@@ -291,6 +292,73 @@ def test_batch_controls_are_ready_after_export_finished_without_clearing(
     assert window.start_batch_action.isEnabled()
     assert window._pending_batch_jobs == [(source, destination)]
     assert "พร้อมเริ่ม" in window.queue_summary.text()
+
+
+def test_open_output_checkbox_updates_preferences(qtbot, monkeypatch) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    saved: list[bool] = []
+    monkeypatch.setattr(
+        "mtpdflogo.presentation.main_window.save_preferences",
+        lambda preferences: saved.append(preferences.open_output_folder_on_finish),
+    )
+
+    window.open_output_folder_on_finish.setChecked(False)
+    window.open_output_folder_on_finish.setChecked(True)
+
+    assert window._preferences.open_output_folder_on_finish is True
+    assert saved[-1:] == [True]
+
+
+def test_successful_export_opens_output_folder_when_requested(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    opened: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "mtpdflogo.presentation.main_window.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+    window._populate_queue([(source, destination)])
+    window._last_export_jobs = [(source, destination)]
+    window.open_output_folder_on_finish.setChecked(True)
+
+    window._export_finished("สำเร็จ 1 ไฟล์, ล้มเหลว 0 ไฟล์ | Workers: 1")
+
+    assert [Path(path) for path in opened] == [destination.parent]
+
+
+def test_output_folder_is_not_opened_when_unchecked_cancelled_or_partial_failure(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    opened: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "mtpdflogo.presentation.main_window.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+    window._populate_queue([(source, destination)])
+    window._last_export_jobs = [(source, destination)]
+
+    window.open_output_folder_on_finish.setChecked(False)
+    window._export_finished("สำเร็จ 1 ไฟล์, ล้มเหลว 0 ไฟล์ | Workers: 1")
+    window.open_output_folder_on_finish.setChecked(True)
+    window._export_finished("ยกเลิกแล้ว: สำเร็จ 0 ไฟล์ | Workers: 1")
+    window._export_finished("สำเร็จ 0 ไฟล์, ล้มเหลว 1 ไฟล์ | Workers: 1")
+
+    assert opened == []
 
 
 def test_cancel_button_marks_active_rows_and_restores_ready_state(
