@@ -60,31 +60,17 @@ def _anchor_rect(
 
 
 def _apply_text(page: fitz.Page, page_rect: fitz.Rect, spec: PdfOverlaySpec) -> None:
-    if spec.rotation % 90:
-        _apply_rotated_text_as_image(page, page_rect, spec)
-        return
-    width = page_rect.width * 0.45
-    height = max(spec.font_size * 2.5, 40)
-    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
-    kwargs = {
-        "fontsize": spec.font_size,
-        "fontname": "helv",
-        "color": spec.color,
-        "rotate": spec.rotation,
-        "overlay": True,
-        "fill_opacity": spec.opacity,
-    }
-    if spec.font_path and spec.font_path.exists():
-        kwargs["fontfile"] = str(spec.font_path)
-    page.insert_textbox(rect, spec.text, **kwargs)
+    _apply_text_as_image(page, page_rect, spec)
 
 
-def _apply_rotated_text_as_image(
+def _apply_text_as_image(
     page: fitz.Page,
     page_rect: fitz.Rect,
     spec: PdfOverlaySpec,
 ) -> None:
-    """Render arbitrary-angle text to a transparent image."""
+    """Render text to a transparent image so Thai/Unicode glyphs survive PDF export."""
+    if not spec.text:
+        return
     scale = 3
     font = (
         ImageFont.truetype(str(spec.font_path), max(1, round(spec.font_size * scale)))
@@ -95,14 +81,23 @@ def _apply_rotated_text_as_image(
     probe = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
     draw = ImageDraw.Draw(probe)
     bbox = draw.multiline_textbbox((padding, padding), spec.text, font=font, spacing=4 * scale)
+    left = min(0, bbox[0] - padding)
+    top = min(0, bbox[1] - padding)
+    right = max(padding, bbox[2] + padding)
+    bottom = max(padding, bbox[3] + padding)
     image = Image.new(
-        "RGBA", (max(1, bbox[2] + padding), max(1, bbox[3] + padding)), (0, 0, 0, 0)
+        "RGBA",
+        (max(1, right - left), max(1, bottom - top)),
+        (0, 0, 0, 0),
     )
     draw = ImageDraw.Draw(image)
     color = tuple(round(channel * 255) for channel in spec.color)
     draw.multiline_text(
-        (padding, padding), spec.text, font=font,
-        fill=(*color, round(255 * spec.opacity)), spacing=4 * scale,
+        (padding - left, padding - top),
+        spec.text,
+        font=font,
+        fill=(*color, round(255 * spec.opacity)),
+        spacing=4 * scale,
     )
     image = image.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
     stream = BytesIO()

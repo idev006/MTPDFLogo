@@ -101,3 +101,4 @@
 - ตำแหน่งต้องคำนวณใหม่จาก `page.rect` ของแต่ละหน้า ห้ามใช้ขนาดหน้าคงที่
 - Opacity ใช้ช่วง 0.0–1.0
 - Font discovery จะอ่านจาก configured font directory
+- PDF text export ต้องใช้ renderer ที่รองรับ Thai/Unicode glyphs จาก font ที่เลือกจริง ห้ามปล่อยให้ข้อความไทยกลายเป็น `????`

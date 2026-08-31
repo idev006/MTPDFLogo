@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import fitz
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, apply_overlays
 from PIL import Image
 
@@ -88,3 +88,45 @@ def test_overlay_service_reports_real_page_progress(tmp_path: Path) -> None:
     )
 
     assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_thai_text_exports_as_visible_pdf_overlay_without_question_marks_path(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "thai-source.pdf"
+    output = tmp_path / "thai-output.pdf"
+    document = fitz.open()
+    document.new_page(width=400, height=240)
+    document.save(source)
+    document.close()
+
+    apply_overlays(
+        source,
+        output,
+        [
+            PdfOverlaySpec(
+                overlay_type=OverlayType.TEXT,
+                position=Position.TOP_CENTER,
+                position_mode=PositionMode.ABSOLUTE,
+                x_percent=50,
+                y_percent=25,
+                text="ข้อความภาษาไทย",
+                font_size=36,
+                font_path=Path("app/assets/fonts/TH-SarabunNew/THSarabunNew.ttf").resolve(),
+                color=(1.0, 0.0, 0.0),
+                opacity=1.0,
+                rotation=0,
+            )
+        ],
+    )
+
+    with fitz.open(output) as result:
+        assert result.page_count == 1
+        assert len(result[0].get_images(full=True)) == 1
+        pixmap = result[0].get_pixmap(alpha=False)
+        assert any(
+            pixmap.samples[index] > 180
+            and pixmap.samples[index + 1] < 120
+            and pixmap.samples[index + 2] < 120
+            for index in range(0, len(pixmap.samples), pixmap.n)
+        )
