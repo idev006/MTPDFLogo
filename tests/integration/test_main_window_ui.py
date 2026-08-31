@@ -26,6 +26,7 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
     assert action_labels.count("เลือก File(s)") == 1
     assert action_labels.count("เลือก Folder") == 1
     assert "เพิ่ม Text+Logo" in action_labels
+    assert "About Dev" in action_labels
     assert "เลือก PDF File(s)" not in action_labels
     assert "Batch PDF (หลายไฟล์)" not in action_labels
     assert [label.text() for label in window.pipeline_labels] == [
@@ -36,6 +37,18 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
         "5  ตรวจ Output",
     ]
     assert window.pipeline_summary.text() == "รอเลือกไฟล์"
+
+
+def test_about_dev_content_is_present_and_privacy_safe(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    about = window._about_dev_text()
+
+    assert "Developer: Masteriii (MT)" in about
+    assert "MTPDFLogo" in about
+    assert "Privacy note" in about
+    assert "@" not in about
 
 
 def test_properties_panel_uses_scrollable_tabs(qtbot) -> None:

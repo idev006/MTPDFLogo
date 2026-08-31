@@ -337,6 +337,10 @@ class MainWindow(QMainWindow):
         self.cancel_action.setToolTip("หยุดรับงานใหม่ และรอไฟล์ที่กำลังทำอยู่จบอย่างปลอดภัย")
         self.cancel_action.setEnabled(False)
         self.cancel_action.triggered.connect(self._cancel_export)
+        toolbar.addSeparator()
+        action = toolbar.addAction("About Dev")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
+        action.triggered.connect(self._show_about_dev)
 
         root = QSplitter(Qt.Orientation.Horizontal)
         root.setChildrenCollapsible(False)
@@ -1201,6 +1205,20 @@ class MainWindow(QMainWindow):
         if folder and folder.exists() and folder.is_dir():
             return folder
         return Path.home()
+
+    def _show_about_dev(self) -> None:
+        QMessageBox.about(self, "About Dev", self._about_dev_text())
+
+    @staticmethod
+    def _about_dev_text() -> str:
+        return (
+            "MTPDFLogo — PDF/Image Overlay Studio\n\n"
+            "Developer: Masteriii (MT)\n"
+            "Role: Senior software/process engineering driven development\n"
+            "Focus: Batch watermark workflow, reliable presets, and cross-platform usability\n\n"
+            "Privacy note: This About page intentionally avoids personal contact details "
+            "or identity-sensitive information."
+        )
 
     def _rebuild_overlay_list(self) -> None:
         self.overlay_list.clear()
