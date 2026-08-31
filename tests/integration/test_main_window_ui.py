@@ -26,6 +26,8 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
     assert action_labels.count("เลือก File(s)") == 1
     assert action_labels.count("เลือก Folder") == 1
     assert "เพิ่ม Text+Logo" in action_labels
+    assert "บันทึก Default" in action_labels
+    assert "โหลด Default" in action_labels
     assert "About Dev" in action_labels
     assert "เลือก PDF File(s)" not in action_labels
     assert "Batch PDF (หลายไฟล์)" not in action_labels
@@ -157,6 +159,8 @@ def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
     assert window._preferences.pdf_folder == pdf_folder
     assert window._preferences.output_folder == output_folder
     assert target.exists()
+    assert window.recent_settings.itemText(1) == target.name
+    assert window.recent_settings.itemData(1) == str(target.resolve())
 
 
 def test_load_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypatch) -> None:
@@ -210,6 +214,74 @@ def test_load_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
     assert window._preferences.pdf_folder == pdf_folder
     assert window._preferences.output_folder == output_folder
     assert window._overlays[0]["text"] == "loaded"
+    assert window.statusBar().currentMessage() == "โหลด Settings: loaded.toml (1 รายการ)"
+
+
+def test_load_settings_warns_when_logo_asset_is_missing(qtbot, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "logo-missing.toml"
+    missing_logo = tmp_path / "missing-logo.png"
+    save_overlay_preset(
+        source,
+        [
+            {
+                "id": "logo-1",
+                "type": OverlayType.IMAGE,
+                "position_mode": PositionMode.PRESET,
+                "position": Position.TOP_RIGHT,
+                "x_percent": 50.0,
+                "y_percent": 50.0,
+                "opacity": 100,
+                "rotation": 0,
+                "font_size": 32,
+                "font": "Mali-Bold",
+                "logo_size": 12,
+                "text": "",
+                "asset_path": str(missing_logo),
+                "color": "#000000",
+            }
+        ],
+    )
+    warnings: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    assert window._load_overlay_settings_file(source)
+
+    assert str(missing_logo) in warnings[0]
+
+
+def test_recent_settings_missing_file_is_removed(qtbot, tmp_path, monkeypatch) -> None:
+    missing = tmp_path / "missing.toml"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.recent_settings_files = [missing]
+    window._update_recent_settings_control()
+    warnings: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    window._load_recent_overlay_settings(1)
+
+    assert window._preferences.recent_settings_files == []
+    assert "missing.toml" in window.statusBar().currentMessage()
+    assert str(missing) in warnings[0]
+
+
+def test_save_and_load_default_settings(qtbot, tmp_path, monkeypatch) -> None:
+    target = tmp_path / "default.toml"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._preferences.default_settings_file = None
+    window._append_overlay(OverlayType.TEXT)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(target), ""))
+
+    window._save_default_overlay_settings()
+
+    assert window._preferences.default_settings_file == target
+    assert target.exists()
+    window._overlays = []
+    assert window._load_overlay_settings_file(target)
+    assert window._overlays[0]["text"] == "ข้อความตัวอย่าง"
 
 
 def test_cancelled_settings_dialog_keeps_preferences(qtbot, tmp_path, monkeypatch) -> None:
@@ -281,6 +353,50 @@ def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) ->
     window.worker_count.setValue(min(window.worker_count.maximum(), 3))
 
     assert f"Workers: {window.worker_count.value()}" in window.queue_summary.text()
+
+
+def test_manual_open_output_folder_button(qtbot, tmp_path, monkeypatch) -> None:
+    output = tmp_path / "out"
+    output.mkdir()
+    opened: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        "mtpdflogo.presentation.main_window.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+
+    window.batch_output_folder.setText(str(output))
+    qtbot.keyClick(window.batch_output_folder, Qt.Key.Key_Enter)
+    window.open_output_folder_button.click()
+
+    assert window.open_output_folder_button.isEnabled()
+    assert [Path(path) for path in opened] == [output]
+
+
+def test_manual_open_output_folder_rejects_missing_path(qtbot, tmp_path) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.batch_output_folder.setText(str(tmp_path / "missing"))
+    qtbot.keyClick(window.batch_output_folder, Qt.Key.Key_Enter)
+
+    assert not window.open_output_folder_button.isEnabled()
+
+
+def test_export_preflight_blocks_missing_logo_asset(qtbot, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    missing_logo = tmp_path / "missing-logo.png"
+    warnings: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.IMAGE, str(missing_logo))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    assert not window._start_export([(source, destination)])
+    assert str(missing_logo) in warnings[0]
 
 
 def test_batch_controls_are_ready_after_export_finished_without_clearing(

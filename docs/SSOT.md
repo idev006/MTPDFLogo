@@ -27,6 +27,8 @@
 - ผู้ใช้ต้องเลือกได้ว่าจะเปิด output folder อัตโนมัติเมื่อ Batch สำเร็จครบทุกไฟล์หรือไม่ โดย default ต้องปิดไว้และจำค่าเป็น preference
 - ผู้ใช้ต้องบันทึก/โหลดชุด Overlay Settings เป็นไฟล์ TOML ได้
 - โปรแกรมต้องจำ folder ล่าสุดที่ผู้ใช้ใช้ Save/Load Overlay Settings โดยแยกจาก PDF folder และ output folder
+- โปรแกรมต้องมี Recent Settings ล่าสุดสูงสุด 5 รายการ, รองรับการบันทึก/โหลด Default Settings, และเตือนแบบไม่ block หาก preset อ้างถึง logo file ที่ไม่มีอยู่
+- ผู้ใช้ต้องเปิด output folder ปลายทางเองได้จากปุ่มข้าง output textbox โดยไม่ต้องรอ Batch สำเร็จ
 - Batch output ต้องเป็นหนึ่ง output ต่อหนึ่ง input และรักษาโครงสร้าง subfolder ได้เมื่อเลือกใช้
 - ในแต่ละไฟล์ประมวลผลทีละหน้าและใช้ parallel ระดับไฟล์
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI

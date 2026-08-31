@@ -326,6 +326,17 @@ class MainWindow(QMainWindow):
         action = toolbar.addAction("โหลด Settings")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
         action.triggered.connect(self._load_overlay_settings)
+        action = toolbar.addAction("บันทึก Default")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        action.triggered.connect(self._save_default_overlay_settings)
+        action = toolbar.addAction("โหลด Default")
+        action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+        action.triggered.connect(self._load_default_overlay_settings)
+        self.recent_settings = QComboBox()
+        self.recent_settings.setMinimumWidth(180)
+        self.recent_settings.activated.connect(self._load_recent_overlay_settings)
+        toolbar.addWidget(self.recent_settings)
+        self._update_recent_settings_control()
         toolbar.addSeparator()
         action = toolbar.addAction("Export Current File")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
@@ -511,8 +522,12 @@ class MainWindow(QMainWindow):
         self.batch_output_folder.editingFinished.connect(self._batch_output_text_changed)
         browse_output = QPushButton("เลือก Folder...")
         browse_output.clicked.connect(self._choose_batch_output)
+        self.open_output_folder_button = QPushButton("เปิด Folder")
+        self.open_output_folder_button.clicked.connect(self._open_output_folder_manual)
         output_row.addWidget(self.batch_output_folder, 1)
         output_row.addWidget(browse_output)
+        output_row.addWidget(self.open_output_folder_button)
+        self._update_output_folder_button()
         setup_row.addWidget(output_group, 2)
         options_group = QGroupBox("Options")
         options_row = QHBoxLayout(options_group)
@@ -770,15 +785,18 @@ class MainWindow(QMainWindow):
         if not output_text:
             self._pending_batch_jobs = []
             self.start_batch_action.setEnabled(False)
+            self._update_output_folder_button()
             self._update_pipeline("เลือก Output Folder ก่อนเริ่มงาน")
             return
         output = Path(output_text)
         if not self._is_valid_output_folder(output):
             self._pending_batch_jobs = []
             self.start_batch_action.setEnabled(False)
+            self._update_output_folder_button()
             self.statusBar().showMessage(f"Output Folder ไม่ถูกต้อง: {output}")
             self._update_pipeline("Output Folder ไม่ถูกต้อง")
             return
+        self._update_output_folder_button()
         sources = self._queue_sources()
         if not sources:
             self._preferences.output_folder = output
@@ -796,6 +814,7 @@ class MainWindow(QMainWindow):
 
     def _apply_output_folder(self, output: Path, summary: str) -> None:
         self.batch_output_folder.setText(str(output))
+        self._update_output_folder_button()
         self._preferences.output_folder = output
         save_preferences(self._preferences)
         sources = self._queue_sources()
@@ -814,6 +833,21 @@ class MainWindow(QMainWindow):
     def _open_output_folder_preference_changed(self, checked: bool) -> None:
         self._preferences.open_output_folder_on_finish = checked
         save_preferences(self._preferences)
+
+    def _update_output_folder_button(self) -> None:
+        if not hasattr(self, "open_output_folder_button"):
+            return
+        output_text = self.batch_output_folder.text().strip()
+        self.open_output_folder_button.setEnabled(
+            bool(output_text) and self._is_valid_output_folder(Path(output_text))
+        )
+
+    def _open_output_folder_manual(self) -> None:
+        output_text = self.batch_output_folder.text().strip()
+        if output_text and self._is_valid_output_folder(Path(output_text)):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(output_text))))
+            return
+        self.statusBar().showMessage("Output Folder ไม่ถูกต้องหรือยังไม่ได้เลือก")
 
     def _choose_batch_input_folder(self) -> None:
         initial = self.batch_input_folder.text().strip() or str(
@@ -1171,9 +1205,49 @@ class MainWindow(QMainWindow):
         target = Path(path)
         if target.suffix.lower() != ".toml":
             target = target.with_suffix(".toml")
+        self._save_overlay_settings_to_file(target)
+
+    def _save_default_overlay_settings(self) -> None:
+        if not self._overlays:
+            QMessageBox.information(
+                self,
+                "ยังไม่มี Settings",
+                "กรุณาเพิ่ม Text หรือ Logo ก่อนบันทึก Default",
+            )
+            return
+        target = self._preferences.default_settings_file
+        if target is None:
+            initial_folder = self._settings_initial_folder()
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "บันทึก Default Overlay Settings",
+                str(initial_folder / "default-mtpdflogo-settings.toml"),
+                "MTPDFLogo settings (*.toml)",
+            )
+            if not path:
+                return
+            target = Path(path)
+            if target.suffix.lower() != ".toml":
+                target = target.with_suffix(".toml")
+            self._preferences.default_settings_file = target
+        elif target.exists():
+            answer = QMessageBox.question(
+                self,
+                "บันทึกทับ Default Settings?",
+                f"ต้องการบันทึกทับ Default Settings เดิมหรือไม่?\n{target}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._save_overlay_settings_to_file(target)
+        self.statusBar().showMessage(f"บันทึก Default Settings แล้ว: {target}")
+
+    def _save_overlay_settings_to_file(self, target: Path) -> None:
         save_overlay_preset(target, self._overlays)
-        self._preferences.settings_folder = target.parent
+        self._preferences.remember_settings_file(target)
         save_preferences(self._preferences)
+        self._update_recent_settings_control()
         self.statusBar().showMessage(f"บันทึก Settings แล้ว: {target}")
 
     def _load_overlay_settings(self) -> None:
@@ -1186,25 +1260,97 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        try:
-            loaded = load_overlay_preset(Path(path))
-        except Exception as error:
-            QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
+        self._load_overlay_settings_file(Path(path))
+
+    def _load_default_overlay_settings(self) -> None:
+        target = self._preferences.default_settings_file
+        if target is None:
+            QMessageBox.information(
+                self,
+                "ยังไม่มี Default Settings",
+                "กรุณากด บันทึก Default ก่อน",
+            )
+            return
+        if not target.exists():
+            self.statusBar().showMessage(f"Default Settings หาไม่พบ: {target}")
+            QMessageBox.warning(self, "Default Settings หาไม่พบ", str(target))
+            return
+        self._load_overlay_settings_file(target)
+
+    def _load_recent_overlay_settings(self, index: int) -> None:
+        path = self.recent_settings.itemData(index)
+        if not path:
             return
         source = Path(path)
-        self._preferences.settings_folder = source.parent
+        if not source.exists():
+            self._preferences.recent_settings_files = [
+                item for item in self._preferences.recent_settings_files if item != source
+            ]
+            save_preferences(self._preferences)
+            self._update_recent_settings_control()
+            self.statusBar().showMessage(f"Recent Settings หาไม่พบ: {source.name}")
+            QMessageBox.warning(self, "Recent Settings หาไม่พบ", str(source))
+            return
+        self._load_overlay_settings_file(source)
+        self.recent_settings.setCurrentIndex(0)
+
+    def _load_overlay_settings_file(self, source: Path) -> bool:
+        try:
+            loaded = load_overlay_preset(source)
+        except Exception as error:
+            QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
+            return False
+        missing_logos = self._missing_logo_paths(loaded)
+        self._preferences.remember_settings_file(source)
         save_preferences(self._preferences)
+        self._update_recent_settings_control()
         self._overlays = loaded
         self._rebuild_overlay_list()
         self._refresh_preview()
-        self.statusBar().showMessage(f"โหลด Settings แล้ว: {path}")
-        self._update_pipeline("โหลด Settings แล้ว")
+        self.statusBar().showMessage(
+            f"โหลด Settings: {source.name} ({len(loaded)} รายการ)"
+        )
+        self._update_pipeline(f"โหลด Settings: {source.name}")
+        if missing_logos:
+            QMessageBox.warning(
+                self,
+                "Logo ใน Settings หาไม่พบ",
+                "ไฟล์ Logo ต่อไปนี้ไม่มีอยู่แล้ว:\n" + "\n".join(missing_logos[:8]),
+            )
+        return True
 
     def _settings_initial_folder(self) -> Path:
         folder = self._preferences.settings_folder
         if folder and folder.exists() and folder.is_dir():
             return folder
         return Path.home()
+
+    def _update_recent_settings_control(self) -> None:
+        if not hasattr(self, "recent_settings"):
+            return
+        self.recent_settings.blockSignals(True)
+        self.recent_settings.clear()
+        self.recent_settings.addItem("Recent Settings...", "")
+        for path in self._preferences.recent_settings_files[:5]:
+            self.recent_settings.addItem(path.name, str(path))
+            self.recent_settings.setItemData(
+                self.recent_settings.count() - 1,
+                str(path),
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        self.recent_settings.setEnabled(len(self._preferences.recent_settings_files) > 0)
+        self.recent_settings.blockSignals(False)
+
+    @staticmethod
+    def _missing_logo_paths(overlays: list[dict[str, Any]]) -> list[str]:
+        missing: list[str] = []
+        for item in overlays:
+            if item.get("type") is not OverlayType.IMAGE:
+                continue
+            asset_path = str(item.get("asset_path", "")).strip()
+            if asset_path and not Path(asset_path).exists():
+                missing.append(asset_path)
+        return missing
 
     def _show_about_dev(self) -> None:
         QMessageBox.about(self, "About Dev", self._about_dev_text())
@@ -1450,6 +1596,15 @@ class MainWindow(QMainWindow):
             self._update_queue_summary()
 
     def _start_export(self, jobs: list[tuple[Path, Path]]) -> bool:
+        missing_logos = self._missing_logo_paths(self._overlays)
+        if missing_logos:
+            QMessageBox.warning(
+                self,
+                "Logo หาไม่พบ",
+                "กรุณาเลือกไฟล์ Logo ใหม่ก่อน Export:\n" + "\n".join(missing_logos[:8]),
+            )
+            self._refresh_batch_readiness()
+            return False
         batch_jobs = [BatchJob(source, destination) for source, destination in jobs]
         issues = validate_jobs(batch_jobs)
         if issues:
