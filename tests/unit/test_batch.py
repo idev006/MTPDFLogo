@@ -7,6 +7,7 @@ from mtpdflogo.application.batch import (
     discover_pdf_files,
     discover_supported_files,
     load_manifest,
+    output_is_inside_input,
     save_manifest,
     validate_jobs,
 )
@@ -20,7 +21,9 @@ def test_build_jobs_keeps_one_output_per_input(tmp_path: Path) -> None:
 
     jobs = build_jobs([source], tmp_path / "output", preserve_subfolders=True, input_root=root)
 
-    assert jobs[0].destination == (tmp_path / "output" / "customer" / "a_marked.pdf").resolve()
+    assert jobs[0].destination == (
+        tmp_path / "output" / "customer" / "a-watermask.pdf"
+    ).resolve()
 
 
 def test_discover_pdf_files_ignores_non_pdf(tmp_path: Path) -> None:
@@ -68,7 +71,7 @@ def test_validate_jobs_accepts_supported_images(tmp_path: Path) -> None:
     source.touch()
     jobs = build_jobs([source], tmp_path / "out")
 
-    assert jobs[0].destination == (tmp_path / "out" / "photo_marked.png").resolve()
+    assert jobs[0].destination == (tmp_path / "out" / "photo-watermask.png").resolve()
     assert validate_jobs(jobs) == []
 
 
@@ -95,3 +98,14 @@ def test_manifest_is_atomic_and_reloadable(tmp_path: Path) -> None:
     save_manifest(path, expected)
 
     assert load_manifest(path) == expected
+
+
+def test_output_is_inside_input_detects_nested_output(tmp_path: Path) -> None:
+    input_root = tmp_path / "input"
+    output_root = input_root / "out"
+    input_root.mkdir()
+    output_root.mkdir()
+
+    assert output_is_inside_input(input_root, output_root)
+    assert not output_is_inside_input(input_root, tmp_path / "outside")
+    assert not output_is_inside_input(None, output_root)

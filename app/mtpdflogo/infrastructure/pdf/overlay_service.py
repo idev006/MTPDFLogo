@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -11,13 +13,17 @@ from pathlib import Path
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
-from mtpdflogo.domain.models import OverlayType, Position
+from mtpdflogo.application.positioning import resolve_overlay_top_left
+from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
 
 @dataclass(frozen=True, slots=True)
 class PdfOverlaySpec:
     overlay_type: OverlayType
     position: Position
+    position_mode: PositionMode = PositionMode.PRESET
+    x_percent: float | None = None
+    y_percent: float | None = None
     text: str = ""
     asset_path: Path | None = None
     font_size: float = 32.0
@@ -31,65 +37,87 @@ class PdfOverlaySpec:
     z_index: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class PageTextRule:
+    keyword: str
+    min_occurrences: int = 1
+    max_occurrences: int | None = None
+    case_sensitive: bool = False
+    use_regex: bool = False
+
+    def normalized_pattern(self) -> str:
+        return unicodedata.normalize("NFKD", self.keyword)
+
+    def count_occurrences(self, text: str) -> int:
+        if self.use_regex:
+            flags = 0 if self.case_sensitive else re.IGNORECASE
+            content = unicodedata.normalize("NFKD", text)
+            return len(re.findall(self.normalized_pattern(), content, flags))
+        keyword = _searchable_text(self.keyword, self.case_sensitive)
+        content = _searchable_text(text, self.case_sensitive)
+        return content.count(keyword)
+
+    def matches(self, text: str) -> bool:
+        count = self.count_occurrences(text)
+        if count < self.min_occurrences:
+            return False
+        if self.max_occurrences is not None and count > self.max_occurrences:
+            return False
+        return True
+
+
+def _searchable_text(value: str, case_sensitive: bool) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    if not case_sensitive:
+        normalized = normalized.casefold()
+    return "".join(normalized.split())
+
+
+def _requires_explicit_font(value: str) -> bool:
+    return any(ord(character) > 127 for character in value)
+
+
 def _anchor_rect(
     page_rect: fitz.Rect,
+    spec: PdfOverlaySpec,
     position: Position,
     width: float,
     height: float,
     margin: float,
 ) -> fitz.Rect:
-    horizontal = {
-        Position.TOP_LEFT: page_rect.x0 + margin,
-        Position.MIDDLE_LEFT: page_rect.x0 + margin,
-        Position.BOTTOM_LEFT: page_rect.x0 + margin,
-        Position.TOP_CENTER: page_rect.x0 + (page_rect.width - width) / 2,
-        Position.MIDDLE_CENTER: page_rect.x0 + (page_rect.width - width) / 2,
-        Position.BOTTOM_CENTER: page_rect.x0 + (page_rect.width - width) / 2,
-        Position.TOP_RIGHT: page_rect.x1 - margin - width,
-        Position.MIDDLE_RIGHT: page_rect.x1 - margin - width,
-        Position.BOTTOM_RIGHT: page_rect.x1 - margin - width,
-    }[position]
-    vertical = {
-        Position.TOP_LEFT: page_rect.y0 + margin,
-        Position.TOP_CENTER: page_rect.y0 + margin,
-        Position.TOP_RIGHT: page_rect.y0 + margin,
-        Position.MIDDLE_LEFT: page_rect.y0 + (page_rect.height - height) / 2,
-        Position.MIDDLE_CENTER: page_rect.y0 + (page_rect.height - height) / 2,
-        Position.MIDDLE_RIGHT: page_rect.y0 + (page_rect.height - height) / 2,
-        Position.BOTTOM_LEFT: page_rect.y1 - margin - height,
-        Position.BOTTOM_CENTER: page_rect.y1 - margin - height,
-        Position.BOTTOM_RIGHT: page_rect.y1 - margin - height,
-    }[position]
+    x, y = resolve_overlay_top_left(
+        page_width=page_rect.width,
+        page_height=page_rect.height,
+        overlay_width=width,
+        overlay_height=height,
+        position=position,
+        position_mode=spec.position_mode,
+        x_percent=spec.x_percent,
+        y_percent=spec.y_percent,
+        margin=margin,
+    )
+    horizontal = page_rect.x0 + x
+    vertical = page_rect.y0 + y
     return fitz.Rect(horizontal, vertical, horizontal + width, vertical + height)
 
 
 def _apply_text(page: fitz.Page, page_rect: fitz.Rect, spec: PdfOverlaySpec) -> None:
-    if spec.rotation % 90:
-        _apply_rotated_text_as_image(page, page_rect, spec)
-        return
-    width = page_rect.width * 0.45
-    height = max(spec.font_size * 2.5, 40)
-    rect = _anchor_rect(page_rect, spec.position, width, height, spec.margin_pt)
-    kwargs = {
-        "fontsize": spec.font_size,
-        "fontname": "helv",
-        "color": spec.color,
-        "rotate": spec.rotation,
-        "overlay": True,
-        "fill_opacity": spec.opacity,
-    }
-    if spec.font_path and spec.font_path.exists():
-        kwargs["fontfile"] = str(spec.font_path)
-    page.insert_textbox(rect, spec.text, **kwargs)
+    _apply_text_as_image(page, page_rect, spec)
 
 
-def _apply_rotated_text_as_image(
+def _apply_text_as_image(
     page: fitz.Page,
     page_rect: fitz.Rect,
     spec: PdfOverlaySpec,
 ) -> None:
-    """Render arbitrary-angle text to a transparent image."""
+    """Render text to a transparent image so Thai/Unicode glyphs survive PDF export."""
+    if not spec.text:
+        return
     scale = 3
+    if _requires_explicit_font(spec.text) and (
+        spec.font_path is None or not spec.font_path.exists()
+    ):
+        raise FileNotFoundError("Unicode/Thai text overlay requires a bundled font")
     font = (
         ImageFont.truetype(str(spec.font_path), max(1, round(spec.font_size * scale)))
         if spec.font_path and spec.font_path.exists()
@@ -99,21 +127,30 @@ def _apply_rotated_text_as_image(
     probe = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
     draw = ImageDraw.Draw(probe)
     bbox = draw.multiline_textbbox((padding, padding), spec.text, font=font, spacing=4 * scale)
+    left = min(0, bbox[0] - padding)
+    top = min(0, bbox[1] - padding)
+    right = max(padding, bbox[2] + padding)
+    bottom = max(padding, bbox[3] + padding)
     image = Image.new(
-        "RGBA", (max(1, bbox[2] + padding), max(1, bbox[3] + padding)), (0, 0, 0, 0)
+        "RGBA",
+        (max(1, right - left), max(1, bottom - top)),
+        (0, 0, 0, 0),
     )
     draw = ImageDraw.Draw(image)
     color = tuple(round(channel * 255) for channel in spec.color)
     draw.multiline_text(
-        (padding, padding), spec.text, font=font,
-        fill=(*color, round(255 * spec.opacity)), spacing=4 * scale,
+        (padding - left, padding - top),
+        spec.text,
+        font=font,
+        fill=(*color, round(255 * spec.opacity)),
+        spacing=4 * scale,
     )
     image = image.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
     stream = BytesIO()
     image.save(stream, format="PNG")
     width = image.width / scale
     height = image.height / scale
-    rect = _anchor_rect(page_rect, spec.position, width, height, spec.margin_pt)
+    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
     page.insert_image(rect, stream=stream.getvalue(), overlay=True)
 
 
@@ -127,16 +164,18 @@ def _apply_image(
         raise FileNotFoundError(f"Logo asset not found: {spec.asset_path}")
     with Image.open(spec.asset_path) as source_image:
         image = source_image.convert("RGBA")
+        target_width = max(1, round(page_rect.width * spec.width_percent / 100))
+        target_height = max(1, round(target_width * image.height / image.width))
+        image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
         if spec.opacity < 1.0:
             alpha = image.getchannel("A").point(lambda value: round(value * spec.opacity))
             image.putalpha(alpha)
         if spec.rotation % 360:
             image = image.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
-        aspect = image.height / image.width
-    width = page_rect.width * spec.width_percent / 100
-    height = width * aspect
-    rect = _anchor_rect(page_rect, spec.position, width, height, spec.margin_pt)
-    cache_key = (spec.asset_path, round(spec.opacity, 4), spec.rotation)
+    width = image.width
+    height = image.height
+    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
+    cache_key = (spec.asset_path, round(spec.opacity, 4), spec.rotation, round(width, 2))
     xref = image_xrefs.get(cache_key)
     if xref is None:
         stream = BytesIO()
@@ -144,13 +183,14 @@ def _apply_image(
         xref = page.insert_image(rect, stream=stream.getvalue())
         image_xrefs[cache_key] = xref
     else:
-        page.insert_image(rect, xref=xref, rotate=spec.rotation)
+        page.insert_image(rect, xref=xref, overlay=True)
 
 
 def apply_overlays(
     source: Path,
     destination: Path,
     overlays: list[PdfOverlaySpec],
+    page_text_rule: PageTextRule | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
@@ -166,11 +206,13 @@ def apply_overlays(
             if cancel_check and cancel_check():
                 raise RuntimeError("batch cancelled")
             page_rect = page.rect
-            for spec in active:
-                if spec.overlay_type is OverlayType.TEXT:
-                    _apply_text(page, page_rect, spec)
-                else:
-                    _apply_image(page, page_rect, spec, image_xrefs)
+            should_apply = page_text_rule is None or page_text_rule.matches(page.get_text("text"))
+            if should_apply:
+                for spec in active:
+                    if spec.overlay_type is OverlayType.TEXT:
+                        _apply_text(page, page_rect, spec)
+                    else:
+                        _apply_image(page, page_rect, spec, image_xrefs)
             if progress_callback:
                 progress_callback(page_number, total_pages)
         with tempfile.NamedTemporaryFile(

@@ -8,8 +8,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from mtpdflogo.domain.models import OverlayType, Position
-from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec
+from mtpdflogo.application.positioning import resolve_overlay_top_left
+from mtpdflogo.domain.models import OverlayType
+from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, _requires_explicit_font
 
 
 def apply_image_overlays(
@@ -43,6 +44,10 @@ def _apply_text(base: Image.Image, spec: PdfOverlaySpec) -> None:
         return
     scale = 3
     font_size = max(1, round(spec.font_size * scale))
+    if _requires_explicit_font(spec.text) and (
+        spec.font_path is None or not spec.font_path.exists()
+    ):
+        raise FileNotFoundError("Unicode/Thai text overlay requires a bundled font")
     font = (
         ImageFont.truetype(str(spec.font_path), font_size)
         if spec.font_path and spec.font_path.exists()
@@ -75,7 +80,7 @@ def _apply_text(base: Image.Image, spec: PdfOverlaySpec) -> None:
         (max(1, text_layer.width // scale), max(1, text_layer.height // scale)),
         Image.Resampling.LANCZOS,
     )
-    base.alpha_composite(text_layer, _anchor_xy(base.size, text_layer.size, spec.position))
+    base.alpha_composite(text_layer, _anchor_xy(base.size, text_layer.size, spec))
 
 
 def _apply_logo(base: Image.Image, spec: PdfOverlaySpec) -> None:
@@ -91,40 +96,29 @@ def _apply_logo(base: Image.Image, spec: PdfOverlaySpec) -> None:
         logo.putalpha(alpha)
     if spec.rotation % 360:
         logo = logo.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
-    base.alpha_composite(logo, _anchor_xy(base.size, logo.size, spec.position))
+    base.alpha_composite(logo, _anchor_xy(base.size, logo.size, spec))
 
 
 def _anchor_xy(
     base_size: tuple[int, int],
     overlay_size: tuple[int, int],
-    position: Position,
+    spec: PdfOverlaySpec,
     margin: int = 24,
 ) -> tuple[int, int]:
     base_width, base_height = base_size
     width, height = overlay_size
-    x = {
-        Position.TOP_LEFT: margin,
-        Position.MIDDLE_LEFT: margin,
-        Position.BOTTOM_LEFT: margin,
-        Position.TOP_CENTER: (base_width - width) // 2,
-        Position.MIDDLE_CENTER: (base_width - width) // 2,
-        Position.BOTTOM_CENTER: (base_width - width) // 2,
-        Position.TOP_RIGHT: base_width - width - margin,
-        Position.MIDDLE_RIGHT: base_width - width - margin,
-        Position.BOTTOM_RIGHT: base_width - width - margin,
-    }[position]
-    y = {
-        Position.TOP_LEFT: margin,
-        Position.TOP_CENTER: margin,
-        Position.TOP_RIGHT: margin,
-        Position.MIDDLE_LEFT: (base_height - height) // 2,
-        Position.MIDDLE_CENTER: (base_height - height) // 2,
-        Position.MIDDLE_RIGHT: (base_height - height) // 2,
-        Position.BOTTOM_LEFT: base_height - height - margin,
-        Position.BOTTOM_CENTER: base_height - height - margin,
-        Position.BOTTOM_RIGHT: base_height - height - margin,
-    }[position]
-    return max(0, x), max(0, y)
+    x, y = resolve_overlay_top_left(
+        page_width=base_width,
+        page_height=base_height,
+        overlay_width=width,
+        overlay_height=height,
+        position=spec.position,
+        position_mode=spec.position_mode,
+        x_percent=spec.x_percent,
+        y_percent=spec.y_percent,
+        margin=margin,
+    )
+    return round(x), round(y)
 
 
 def _save_atomically(image: Image.Image, destination: Path) -> None:
