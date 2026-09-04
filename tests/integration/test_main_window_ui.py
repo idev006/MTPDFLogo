@@ -2,6 +2,8 @@ from pathlib import Path
 
 import fitz
 import pytest
+from mtpdflogo.application.export_policy import output_conflict_issues
+from mtpdflogo.application.positioning import point_to_percent
 from mtpdflogo.config.overlay_preset import save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.presentation.main_window import DraggableTextItem, MainWindow
@@ -207,12 +209,20 @@ def test_preview_drop_updates_only_dragged_item_to_absolute(qtbot) -> None:
     dragged = QGraphicsTextItem("dragged")
     dragged.setPos(90, 190)
     window._scene.setSceneRect(0, 0, 200, 400)
+    center_x = dragged.pos().x() + dragged.boundingRect().width() / 2
+    center_y = dragged.pos().y() + dragged.boundingRect().height() / 2
+    expected_x, expected_y = point_to_percent(
+        x=center_x,
+        y=center_y,
+        page_width=200,
+        page_height=400,
+    )
 
     window._preview_item_dropped("overlay-1", dragged)
 
     assert window._overlays[0]["position_mode"] is PositionMode.ABSOLUTE
-    assert 40 <= window._overlays[0]["x_percent"] <= 60
-    assert 45 <= window._overlays[0]["y_percent"] <= 55
+    assert window._overlays[0]["x_percent"] == round(expected_x, 2)
+    assert window._overlays[0]["y_percent"] == round(expected_y, 2)
     assert window._overlays[1]["position_mode"] is PositionMode.PRESET
     assert window.position_mode.currentData() == PositionMode.ABSOLUTE
 
@@ -599,10 +609,12 @@ def test_output_conflict_is_ignored_when_overwrite_is_checked(qtbot, tmp_path) -
     qtbot.addWidget(window)
     window.overwrite_outputs.setChecked(True)
 
-    assert window._output_conflict_issues(
+    assert output_conflict_issues(
         [(source, destination)],
         output / ".mtpdflogo-batch-status.json",
         "fingerprint",
+        overwrite=window.overwrite_outputs.isChecked(),
+        resume_enabled=window._config.resume_enabled,
     ) == []
 
 

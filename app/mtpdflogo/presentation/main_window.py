@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import multiprocessing
 import os
 import re
-import tempfile
 import threading
 from concurrent.futures import FIRST_COMPLETED, CancelledError, ProcessPoolExecutor, wait
 from pathlib import Path
@@ -75,6 +72,11 @@ from mtpdflogo.application.batch import (
     output_is_inside_input,
     save_manifest,
     validate_jobs,
+)
+from mtpdflogo.application.export_policy import (
+    output_conflict_issues,
+    output_root_write_error,
+    settings_fingerprint,
 )
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
 from mtpdflogo.config import (
@@ -204,60 +206,6 @@ def _process_file_job(
         )
 
 
-def _settings_fingerprint(
-    specs: list[PdfOverlaySpec],
-    page_text_rule: PageTextRule | None,
-) -> str:
-    payload = {
-        "overlays": [
-            {
-                "overlay_type": str(spec.overlay_type),
-                "position": str(spec.position),
-                "position_mode": str(spec.position_mode),
-                "x_percent": spec.x_percent,
-                "y_percent": spec.y_percent,
-                "text": spec.text,
-                "asset_path": str(spec.asset_path) if spec.asset_path else None,
-                "asset_stat": _file_fingerprint(spec.asset_path),
-                "font_size": spec.font_size,
-                "font_path": str(spec.font_path) if spec.font_path else None,
-                "font_stat": _file_fingerprint(spec.font_path),
-                "color": spec.color,
-                "opacity": spec.opacity,
-                "rotation": spec.rotation,
-                "width_percent": spec.width_percent,
-                "margin_pt": spec.margin_pt,
-                "enabled": spec.enabled,
-                "z_index": spec.z_index,
-            }
-            for spec in specs
-        ],
-        "page_text_rule": (
-            {
-                "keyword": page_text_rule.keyword,
-                "min_occurrences": page_text_rule.min_occurrences,
-                "max_occurrences": page_text_rule.max_occurrences,
-                "case_sensitive": page_text_rule.case_sensitive,
-                "use_regex": page_text_rule.use_regex,
-            }
-            if page_text_rule
-            else None
-        ),
-    }
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _file_fingerprint(path: Path | None) -> dict[str, int] | None:
-    if path is None:
-        return None
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
-    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
-
-
 class ExportWorker(QObject):
     progress = Signal(int, str)
     file_progress = Signal(str, int, int)
@@ -282,7 +230,7 @@ class ExportWorker(QObject):
         self.manifest_path = manifest_path
         self.worker_count = worker_count
         self.resume_enabled = resume_enabled
-        self.settings_fingerprint = _settings_fingerprint(specs, page_text_rule)
+        self.settings_fingerprint = settings_fingerprint(specs, page_text_rule)
         self.cancel_event = threading.Event()
         self.process_cancel_event: Any | None = None
 
@@ -1697,58 +1645,6 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
-    def _output_conflict_issues(
-        self,
-        jobs: list[tuple[Path, Path]],
-        manifest_path: Path,
-        settings_fingerprint: str,
-    ) -> list[str]:
-        if self.overwrite_outputs.isChecked():
-            return []
-        manifest = load_manifest(manifest_path) if self._config.resume_enabled else {}
-        issues: list[str] = []
-        for source, destination in jobs:
-            if not destination.exists():
-                continue
-            if self._config.resume_enabled and self._is_resume_match(
-                source,
-                destination,
-                manifest,
-                settings_fingerprint,
-            ):
-                continue
-            issues.append(str(destination))
-        return issues
-
-    @staticmethod
-    def _is_resume_match(
-        source: Path,
-        destination: Path,
-        manifest: dict[str, dict[str, str | int]],
-        settings_fingerprint: str,
-    ) -> bool:
-        try:
-            source_stat = source.stat()
-        except OSError:
-            return False
-        record = manifest.get(job_key(BatchJob(source, destination)), {})
-        return (
-            record.get("status") == "completed"
-            and record.get("source_size") == source_stat.st_size
-            and record.get("source_mtime_ns") == source_stat.st_mtime_ns
-            and record.get("settings_fingerprint") == settings_fingerprint
-        )
-
-    @staticmethod
-    def _output_root_write_error(output_root: Path) -> str | None:
-        try:
-            output_root.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(dir=output_root, delete=True):
-                pass
-        except OSError as error:
-            return str(error)
-        return None
-
     def _show_about_dev(self) -> None:
         QMessageBox.about(self, "About Dev", self._about_dev_text())
 
@@ -2036,7 +1932,7 @@ class MainWindow(QMainWindow):
             )
             self._refresh_batch_readiness()
             return False
-        write_error = self._output_root_write_error(output_root)
+        write_error = output_root_write_error(output_root)
         if write_error:
             QMessageBox.warning(
                 self,
@@ -2047,12 +1943,14 @@ class MainWindow(QMainWindow):
             return False
         specs = self._to_specs()
         page_text_rule = self._page_text_rule()
-        settings_fingerprint = _settings_fingerprint(specs, page_text_rule)
+        current_settings_fingerprint = settings_fingerprint(specs, page_text_rule)
         manifest_path = output_root / ".mtpdflogo-batch-status.json"
-        output_conflicts = self._output_conflict_issues(
+        output_conflicts = output_conflict_issues(
             jobs,
             manifest_path,
-            settings_fingerprint,
+            current_settings_fingerprint,
+            overwrite=self.overwrite_outputs.isChecked(),
+            resume_enabled=self._config.resume_enabled,
         )
         if output_conflicts:
             QMessageBox.warning(

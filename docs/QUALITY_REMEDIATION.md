@@ -36,6 +36,8 @@ The resolver supports:
 The zip installer contains `install.bat`, `start.bat`, source files, config, docs, and tests.
 `install.bat` creates `.venv` with `py -3.12` and installs the project into that environment.
 `start-debug.bat` is included for visible startup diagnostics when `start.bat` exits silently.
+The Windows CI workflow runs runtime smoke, lint, pytest coverage gate, source zip build,
+zip-layout verification, and explicit installer smoke with `--no-cov`.
 
 ### Output Policy
 
@@ -106,3 +108,16 @@ These are not release blockers after the current remediation, but they should be
 - add optional OCR mode for scanned PDFs with no text layer
 - add visual regression tests for rotated text/logo preview parity
 - raise the coverage gate from 75% to 85%, then 90%, as orchestration tests mature
+
+Implemented in the 2026-09-05 governance pass:
+
+- Windows CI workflow at `.github/workflows/windows-ci.yml`
+- clean source zip smoke tests under `tests/smoke/`
+- export policy extraction under `app/mtpdflogo/application/export_policy.py`
+- build zip exclusions for `.egg-info`, cache folders, and bytecode
+
+Still deferred:
+
+- split `ExportWorker` and QThread/process orchestration out of `main_window.py`
+- add explicit Retry Failed workflow and persisted attempt metadata
+- add visual regression tests for preview/export parity

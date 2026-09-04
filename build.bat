@@ -31,13 +31,13 @@ if exist "%STAGE_DIR%" rmdir /s /q "%STAGE_DIR%"
 mkdir "%STAGE_DIR%"
 if errorlevel 1 goto build_failed
 
-robocopy "%PROJECT_DIR%app" "%STAGE_DIR%\app" /E /XD __pycache__ /XF *.pyc >nul
+robocopy "%PROJECT_DIR%app" "%STAGE_DIR%\app" /E /XD __pycache__ mtpdflogo.egg-info .pytest_cache .ruff_cache /XF *.pyc *.pyo >nul
 if errorlevel 8 goto build_failed
 robocopy "%PROJECT_DIR%config" "%STAGE_DIR%\config" /E >nul
 if errorlevel 8 goto build_failed
 robocopy "%PROJECT_DIR%docs" "%STAGE_DIR%\docs" /E >nul
 if errorlevel 8 goto build_failed
-robocopy "%PROJECT_DIR%tests" "%STAGE_DIR%\tests" /E /XD __pycache__ .pytest_cache /XF *.pyc >nul
+robocopy "%PROJECT_DIR%tests" "%STAGE_DIR%\tests" /E /XD __pycache__ .pytest_cache .ruff_cache /XF *.pyc *.pyo >nul
 if errorlevel 8 goto build_failed
 
 copy "%PROJECT_DIR%pyproject.toml" "%STAGE_DIR%\pyproject.toml" >nul
@@ -63,5 +63,6 @@ exit /b 0
 echo.
 echo [ERROR] Build failed.
 echo.
+if "%MTPDFLOGO_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1

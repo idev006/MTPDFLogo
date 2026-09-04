@@ -36,6 +36,7 @@
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI
 - ผู้ใช้ต้องกรองหน้า PDF ตามจำนวนคำหรือ regex ที่พบในหน้านั้นได้ โดยนับจาก text layer ของ PDF และ normalize ภาษาไทยก่อนเทียบ
 - ต้องรองรับ pytest และ zip installer สำหรับ Windows ที่สร้าง `.venv` ด้วย `py -3.12`
+- ต้องมี Windows CI บน GitHub Actions สำหรับ lint, pytest coverage gate, runtime import smoke, build zip และ installer smoke
 
 ## Performance baseline
 
@@ -44,6 +45,7 @@
 - cache asset ที่ใช้ซ้ำภายในงาน
 - ใช้ temporary output และ atomic replace
 - มี progress, cancel, resume และ error isolation
+- Release pipeline ต้องพิสูจน์ clean source zip ว่าไม่มี `.venv`, cache, `.pyc`, `.egg-info`, `build/` หรือ `dist/` ติดไป
 
 ## UI/UX and process pipeline
 
@@ -95,7 +97,7 @@
 1. Requirement และ architectural decisions ที่ขัดแย้งกันให้ยึดไฟล์นี้เป็นหลักจนกว่าจะมีการแก้ไข
 2. Runtime defaults อยู่ใน `config/app.toml`
 3. Domain rules อยู่ใน `app/mtpdflogo/domain/`
-4. UI ห้ามเป็นเจ้าของ business logic
+4. UI ห้ามเป็นเจ้าของ business logic; export policy/resume/output conflict ต้องอยู่ใน `app/mtpdflogo/application/`
 5. ทุก feature ใหม่ต้องมี test ที่เหมาะสม
 
 ## Current decisions
@@ -112,3 +114,6 @@
 - Font discovery จะอ่านจาก configured font directory
 - PDF text export ต้องใช้ renderer ที่รองรับ Thai/Unicode glyphs จาก font ที่เลือกจริง ห้ามปล่อยให้ข้อความไทยกลายเป็น `????`
 - Runtime resources เช่น config และ fonts ต้องโหลดได้ทั้ง source tree, editable install, package install, และ zip installer layout
+- Export policy ที่ไม่ต้องพึ่ง Qt เช่น settings fingerprint, resume match, output conflict และ output writeability อยู่ใน `app/mtpdflogo/application/export_policy.py`
+- Coverage gate เริ่มต้นที่ 75% พร้อม branch coverage และต้องค่อย ๆ ยกระดับเป็น 85%/90% หลังแยก orchestration tests เพิ่ม
+- Smoke tests สำหรับ zip installer อยู่ใน `tests/smoke/` และต้องรันด้วย `--run-installer-smoke --no-cov` หลัง build zip

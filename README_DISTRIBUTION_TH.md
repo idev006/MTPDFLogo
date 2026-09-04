@@ -40,6 +40,12 @@ build.bat
 ภายใน zip จะมี `install.bat` สำหรับสร้าง `.venv` ด้วย `py -3.12` และติดตั้ง dependencies
 `pytest` จะวัด coverage และต้องผ่านขั้นต่ำ 75%
 
+ถ้าต้องการทดสอบ installer zip แบบเครื่องสะอาด ให้รันหลัง `build.bat`:
+
+```bat
+.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip
+```
+
 ## หมายเหตุ
 
 - โปรแกรมไม่รวมไฟล์ PDF หลายไฟล์เข้าด้วยกัน
