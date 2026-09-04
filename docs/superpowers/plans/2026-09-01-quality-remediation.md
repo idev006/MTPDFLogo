@@ -33,10 +33,10 @@
 - Produces: `resource_path(*parts: str) -> Path`, `config_path() -> Path`, `font_directory() -> Path`
 - Consumes: current `load_config(path: Path | None = None)`
 
-- [ ] Replace frozen-executable delivery with a zip installer that creates `.venv` using `py -3.12`.
-- [ ] Add runtime resolver for source-tree and installed source package paths.
-- [ ] Route config/font loading through resolver.
-- [ ] Add tests for explicit config load and fallback defaults.
+- [x] Replace frozen-executable delivery with a zip installer that creates `.venv` using `py -3.12`.
+- [x] Add runtime resolver for source-tree and installed source package paths.
+- [x] Route config/font loading through resolver.
+- [x] Add tests for explicit config load and fallback defaults.
 
 ### Task 2: Output Policy and Batch Preflight
 
@@ -50,11 +50,11 @@
 - Produces: `AppConfig.output_suffix`, `overwrite`, `resume_enabled`, `preserve_subfolders`
 - Produces: `validate_jobs(..., overwrite: bool, input_root: Path | None, output_root: Path | None)`
 
-- [ ] Load config fields already present in `config/app.toml`.
-- [ ] Use config suffix instead of hardcoded `-watermask`.
-- [ ] Block output folders inside input folders.
-- [ ] Enforce overwrite policy or skip only through resume manifest.
-- [ ] Validate at least one effective overlay before export.
+- [x] Load config fields already present in `config/app.toml`.
+- [x] Use config suffix instead of hardcoded `-watermask`.
+- [x] Block output folders inside input folders.
+- [x] Enforce overwrite policy or skip only through resume manifest.
+- [x] Validate at least one effective overlay before export.
 
 ### Task 3: Export Correctness
 
@@ -68,10 +68,10 @@
 - Consumes: `PdfOverlaySpec`
 - Produces: stable logo sizing/rotation contract and safer `PageTextRule` regex handling.
 
-- [ ] Fix cached xref rotation by pre-transforming once and inserting cache hits without `rotate=`.
-- [ ] Add multi-page rotated-logo regression test.
-- [ ] Validate normalized regex, not only raw regex.
-- [ ] Fail fast if text font cannot be loaded for export.
+- [x] Fix cached xref rotation by pre-transforming once and inserting cache hits without `rotate=`.
+- [x] Add multi-page rotated-logo regression test.
+- [x] Validate normalized regex, not only raw regex.
+- [x] Fail fast if text font cannot be loaded for export.
 
 ### Task 4: Cancellation and UI Workflow Safety
 
@@ -83,11 +83,11 @@
 - Produces: process-safe cancel token passed into worker jobs.
 - Produces: drag threshold so clicking does not change placement mode.
 
-- [ ] Pass a multiprocessing-safe cancel flag into each processor.
-- [ ] Submit jobs incrementally so cancel prevents new work from starting.
-- [ ] Track finished/cancelled rows based on real future outcomes.
-- [ ] Prevent plain click on preview item from changing preset to absolute.
-- [ ] Intercept window close during active export.
+- [x] Pass a multiprocessing-safe cancel flag into each processor.
+- [x] Submit jobs incrementally so cancel prevents new work from starting.
+- [x] Track finished/cancelled rows based on real future outcomes.
+- [x] Prevent plain click on preview item from changing preset to absolute.
+- [x] Intercept window close during active export.
 
 ### Task 5: Documentation and Lessons Learned
 
@@ -99,6 +99,22 @@
 **Interfaces:**
 - Produces: release gates, known limitations, and maintenance lessons.
 
-- [ ] Update SSOT with page filtering, regex, preview page navigation, zoom, and stricter output policy.
-- [ ] Write a how-to/reference quality remediation note.
-- [ ] Write lessons learned from audit and fixes.
+- [x] Update SSOT with page filtering, regex, preview page navigation, zoom, and stricter output policy.
+- [x] Write a how-to/reference quality remediation note.
+- [x] Write lessons learned from audit and fixes.
+
+## 2026-09-05 QA Governance Update
+
+- [x] Full automated suite verified: 80 tests passing on Python 3.12.
+- [x] Ruff quality gate verified.
+- [x] Runtime dependency smoke verified with `pip check`.
+- [x] Coverage governance introduced with an initial 75% fail-under gate.
+- [x] Added `start-debug.bat` for visible startup failure diagnostics.
+- [x] Updated build flow to install `[dev]` dependencies before lint/test gates.
+
+Deferred follow-up:
+
+- [ ] Add CI on Windows.
+- [ ] Add clean-machine zip install smoke test.
+- [ ] Split batch orchestration/readiness out of `main_window.py`.
+- [ ] Add explicit retry-failed workflow and state-machine documentation.

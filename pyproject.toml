@@ -40,7 +40,19 @@ mtpdflogo = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-config"
+addopts = "-ra --strict-config --cov=app/mtpdflogo --cov-report=term-missing --cov-report=xml:build/coverage.xml --cov-fail-under=75"
+
+[tool.coverage.run]
+branch = true
+source = ["app/mtpdflogo"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
 
 [tool.ruff]
 target-version = "py312"

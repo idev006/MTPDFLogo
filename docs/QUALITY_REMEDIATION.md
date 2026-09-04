@@ -14,6 +14,9 @@ Before a Windows release, run:
 .\build.bat
 ```
 
+`pytest` is configured with coverage reporting and an initial minimum coverage gate of 75%.
+The next target is to raise this to 85% after worker-level and preview/export parity tests are expanded.
+
 The installer zip must install on a clean Windows machine, create `.venv` with `py -3.12`, and start with bundled fonts and `config/app.toml`.
 The current supported delivery format is `dist/MTPDFLogo-installer.zip`, not a frozen executable.
 
@@ -32,6 +35,7 @@ The resolver supports:
 
 The zip installer contains `install.bat`, `start.bat`, source files, config, docs, and tests.
 `install.bat` creates `.venv` with `py -3.12` and installs the project into that environment.
+`start-debug.bat` is included for visible startup diagnostics when `start.bat` exits silently.
 
 ### Output Policy
 
@@ -101,3 +105,4 @@ These are not release blockers after the current remediation, but they should be
 - split `main_window.py` into batch worker, preview controller, and overlay mapping modules
 - add optional OCR mode for scanned PDFs with no text layer
 - add visual regression tests for rotated text/logo preview parity
+- raise the coverage gate from 75% to 85%, then 90%, as orchestration tests mature

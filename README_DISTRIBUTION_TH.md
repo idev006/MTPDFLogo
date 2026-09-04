@@ -6,11 +6,15 @@
 2. ดับเบิลคลิก `install.bat` หนึ่งครั้ง
 3. เมื่อติดตั้งเสร็จ ดับเบิลคลิก `start.bat` เพื่อเปิดโปรแกรม
 
+ถ้าโปรแกรมไม่เปิด หรืออยากเห็นข้อความ error ให้ดับเบิลคลิก `start-debug.bat`
+แทน `start.bat` หน้าต่างนี้จะค้างไว้เพื่อแสดง traceback/error ให้ตรวจสอบได้ง่าย
+
 ## สิ่งที่ต้องมีในเครื่อง
 
 - Python 3.12
 - ใช้คำสั่ง `py -3.12` ได้จาก Command Prompt
 - Internet สำหรับติดตั้ง dependencies ครั้งแรก
+- package นี้เป็น source zip installer สำหรับ Windows ไม่ใช่ standalone `.exe`
 
 ## การใช้งานหลัก
 
@@ -34,6 +38,7 @@ build.bat
 
 คำสั่งนี้จะรัน `ruff`, `pytest` แล้วสร้างไฟล์ `dist\MTPDFLogo-installer.zip`
 ภายใน zip จะมี `install.bat` สำหรับสร้าง `.venv` ด้วย `py -3.12` และติดตั้ง dependencies
+`pytest` จะวัด coverage และต้องผ่านขั้นต่ำ 75%
 
 ## หมายเหตุ
 
