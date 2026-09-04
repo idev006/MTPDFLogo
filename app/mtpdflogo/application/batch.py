@@ -87,7 +87,7 @@ def _within_depth(path: Path, root: Path, max_depth: int | None) -> bool:
 def build_jobs(
     sources: Iterable[Path],
     output_folder: Path,
-    suffix: str = "_marked",
+    suffix: str = "-watermask",
     preserve_subfolders: bool = False,
     input_root: Path | None = None,
 ) -> list[BatchJob]:
@@ -124,6 +124,16 @@ def validate_jobs(jobs: Iterable[BatchJob]) -> list[PreflightIssue]:
         if job.source.resolve() == destination:
             issues.append(PreflightIssue(job.source, "output must not overwrite input"))
     return issues
+
+
+def output_is_inside_input(input_root: Path | None, output_root: Path | None) -> bool:
+    if input_root is None or output_root is None:
+        return False
+    try:
+        output_root.resolve().relative_to(input_root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def job_key(job: BatchJob) -> str:

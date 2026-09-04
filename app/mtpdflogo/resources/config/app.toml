@@ -1,0 +1,21 @@
+[app]
+name = "MTPDFLogo"
+language = "th"
+
+[batch]
+max_workers = 2
+continue_on_error = true
+resume_enabled = true
+overwrite = false
+output_suffix = "-watermask"
+preserve_subfolders = true
+output_folder = ""
+
+[performance]
+preview_dpi = 120
+progress_interval_ms = 500
+render_preview_during_export = false
+image_cache_enabled = true
+
+[paths]
+font_directory = "app/assets/fonts"

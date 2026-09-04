@@ -19,7 +19,6 @@ dev = [
     "pytest-qt>=4,<5",
     "pytest-cov>=5,<7",
     "ruff>=0.6,<1",
-    "pyinstaller>=6,<7",
 ]
 
 [project.scripts]
@@ -27,9 +26,17 @@ mtpdflogo = "mtpdflogo.__main__:main"
 
 [tool.setuptools]
 package-dir = {"" = "app"}
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["app"]
+
+[tool.setuptools.package-data]
+mtpdflogo = [
+    "resources/config/*.toml",
+    "resources/assets/fonts/**/*.ttf",
+    "resources/assets/fonts/**/*.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from mtpdflogo.application.positioning import resolve_overlay_top_left
 from mtpdflogo.domain.models import OverlayType
-from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec
+from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, _requires_explicit_font
 
 
 def apply_image_overlays(
@@ -44,6 +44,10 @@ def _apply_text(base: Image.Image, spec: PdfOverlaySpec) -> None:
         return
     scale = 3
     font_size = max(1, round(spec.font_size * scale))
+    if _requires_explicit_font(spec.text) and (
+        spec.font_path is None or not spec.font_path.exists()
+    ):
+        raise FileNotFoundError("Unicode/Thai text overlay requires a bundled font")
     font = (
         ImageFont.truetype(str(spec.font_path), font_size)
         if spec.font_path and spec.font_path.exists()

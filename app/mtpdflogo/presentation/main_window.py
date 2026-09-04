@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import multiprocessing
 import os
+import re
+import tempfile
 import threading
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, CancelledError, ProcessPoolExecutor, wait
 from pathlib import Path
 from queue import Empty
 from typing import Any
@@ -68,11 +72,13 @@ from mtpdflogo.application.batch import (
     discover_supported_files,
     job_key,
     load_manifest,
+    output_is_inside_input,
     save_manifest,
     validate_jobs,
 )
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
 from mtpdflogo.config import (
+    font_directory,
     load_config,
     load_overlay_preset,
     load_preferences,
@@ -81,7 +87,11 @@ from mtpdflogo.config import (
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.image_overlay_service import apply_image_overlays
-from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, apply_overlays
+from mtpdflogo.infrastructure.pdf.overlay_service import (
+    PageTextRule,
+    PdfOverlaySpec,
+    apply_overlays,
+)
 
 
 class DraggableTextItem(QGraphicsTextItem):
@@ -91,6 +101,7 @@ class DraggableTextItem(QGraphicsTextItem):
         super().__init__(text)
         self.overlay_id = overlay_id
         self.owner = owner
+        self._press_pos = self.pos()
         self._configure_drag_flags()
 
     def _configure_drag_flags(self) -> None:
@@ -102,12 +113,14 @@ class DraggableTextItem(QGraphicsTextItem):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def mousePressEvent(self, event: Any) -> None:
+        self._press_pos = self.pos()
         self.owner._select_overlay_by_id(self.overlay_id)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: Any) -> None:
         super().mouseReleaseEvent(event)
-        self.owner._preview_item_dropped(self.overlay_id, self)
+        if (self.pos() - self._press_pos).manhattanLength() >= 2:
+            self.owner._preview_item_dropped(self.overlay_id, self)
 
 
 class DraggablePixmapItem(QGraphicsPixmapItem):
@@ -117,6 +130,7 @@ class DraggablePixmapItem(QGraphicsPixmapItem):
         super().__init__(pixmap)
         self.overlay_id = overlay_id
         self.owner = owner
+        self._press_pos = self.pos()
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -125,18 +139,40 @@ class DraggablePixmapItem(QGraphicsPixmapItem):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def mousePressEvent(self, event: Any) -> None:
+        self._press_pos = self.pos()
         self.owner._select_overlay_by_id(self.overlay_id)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: Any) -> None:
         super().mouseReleaseEvent(event)
-        self.owner._preview_item_dropped(self.overlay_id, self)
+        if (self.pos() - self._press_pos).manhattanLength() >= 2:
+            self.owner._preview_item_dropped(self.overlay_id, self)
+
+
+class PreviewGraphicsView(QGraphicsView):
+    """Preview view with Ctrl+wheel zoom while keeping normal scroll behavior."""
+
+    def __init__(self, scene: QGraphicsScene, owner: MainWindow) -> None:
+        super().__init__(scene)
+        self.owner = owner
+
+    def wheelEvent(self, event: Any) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.angleDelta().y() > 0:
+                self.owner._zoom_preview_in()
+            else:
+                self.owner._zoom_preview_out()
+            event.accept()
+            return
+        super().wheelEvent(event)
 
 
 def _process_file_job(
     source: Path,
     destination: Path,
     specs: list[PdfOverlaySpec],
+    page_text_rule: PageTextRule | None,
+    cancel_event: Any,
     progress_queue: Any,
 ) -> None:
     """Top-level worker function so it is safe for Windows spawn/PyInstaller."""
@@ -145,14 +181,81 @@ def _process_file_job(
         if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
         else apply_overlays
     )
-    processor(
-        source,
-        destination,
-        specs,
-        progress_callback=lambda current, total: progress_queue.put(
-            (str(source), current, total)
+    if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
+        processor(
+            source,
+            destination,
+            specs,
+            cancel_check=cancel_event.is_set,
+            progress_callback=lambda current, total: progress_queue.put(
+                (str(source), current, total)
+            ),
+        )
+    else:
+        processor(
+            source,
+            destination,
+            specs,
+            page_text_rule=page_text_rule,
+            cancel_check=cancel_event.is_set,
+            progress_callback=lambda current, total: progress_queue.put(
+                (str(source), current, total)
+            ),
+        )
+
+
+def _settings_fingerprint(
+    specs: list[PdfOverlaySpec],
+    page_text_rule: PageTextRule | None,
+) -> str:
+    payload = {
+        "overlays": [
+            {
+                "overlay_type": str(spec.overlay_type),
+                "position": str(spec.position),
+                "position_mode": str(spec.position_mode),
+                "x_percent": spec.x_percent,
+                "y_percent": spec.y_percent,
+                "text": spec.text,
+                "asset_path": str(spec.asset_path) if spec.asset_path else None,
+                "asset_stat": _file_fingerprint(spec.asset_path),
+                "font_size": spec.font_size,
+                "font_path": str(spec.font_path) if spec.font_path else None,
+                "font_stat": _file_fingerprint(spec.font_path),
+                "color": spec.color,
+                "opacity": spec.opacity,
+                "rotation": spec.rotation,
+                "width_percent": spec.width_percent,
+                "margin_pt": spec.margin_pt,
+                "enabled": spec.enabled,
+                "z_index": spec.z_index,
+            }
+            for spec in specs
+        ],
+        "page_text_rule": (
+            {
+                "keyword": page_text_rule.keyword,
+                "min_occurrences": page_text_rule.min_occurrences,
+                "max_occurrences": page_text_rule.max_occurrences,
+                "case_sensitive": page_text_rule.case_sensitive,
+                "use_regex": page_text_rule.use_regex,
+            }
+            if page_text_rule
+            else None
         ),
-    )
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _file_fingerprint(path: Path | None) -> dict[str, int] | None:
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 class ExportWorker(QObject):
@@ -167,18 +270,26 @@ class ExportWorker(QObject):
         self,
         jobs: list[tuple[Path, Path]],
         specs: list[PdfOverlaySpec],
+        page_text_rule: PageTextRule | None,
         manifest_path: Path,
         worker_count: int,
+        resume_enabled: bool = True,
     ) -> None:
         super().__init__()
         self.jobs = jobs
         self.specs = specs
+        self.page_text_rule = page_text_rule
         self.manifest_path = manifest_path
         self.worker_count = worker_count
+        self.resume_enabled = resume_enabled
+        self.settings_fingerprint = _settings_fingerprint(specs, page_text_rule)
         self.cancel_event = threading.Event()
+        self.process_cancel_event: Any | None = None
 
     def cancel(self) -> None:
         self.cancel_event.set()
+        if self.process_cancel_event is not None:
+            self.process_cancel_event.set()
 
     def run(self) -> None:
         """Run jobs while forwarding real page-level progress to the UI."""
@@ -189,12 +300,22 @@ class ExportWorker(QObject):
         pending_jobs: list[tuple[Path, Path]] = []
         for source, destination in self.jobs:
             key = job_key(BatchJob(source, destination))
-            source_stat = source.stat()
+            try:
+                source_stat = source.stat()
+            except OSError as error:
+                failures += 1
+                manifest[key] = {"status": "failed", "error": str(error)}
+                save_manifest(self.manifest_path, manifest)
+                self.file_updated.emit(str(source), "Failed", 0)
+                self.file_failed.emit(str(source), str(error))
+                continue
             record = manifest.get(key, {})
             if (
-                record.get("status") == "completed"
+                self.resume_enabled
+                and record.get("status") == "completed"
                 and record.get("source_size") == source_stat.st_size
                 and record.get("source_mtime_ns") == source_stat.st_mtime_ns
+                and record.get("settings_fingerprint") == self.settings_fingerprint
                 and destination.exists()
             ):
                 completed += 1
@@ -210,13 +331,31 @@ class ExportWorker(QObject):
             context = multiprocessing.get_context("spawn")
             with multiprocessing.Manager() as manager:
                 progress_queue = manager.Queue()
+                self.process_cancel_event = manager.Event()
+                if self.cancel_event.is_set():
+                    self.process_cancel_event.set()
                 with ProcessPoolExecutor(max_workers=worker_count, mp_context=context) as pool:
-                    futures = {
-                        pool.submit(
-                            _process_file_job, source, destination, self.specs, progress_queue
-                        ): (source, destination)
-                        for source, destination in pending_jobs
-                    }
+                    job_queue = list(pending_jobs)
+                    futures: dict[Any, tuple[Path, Path]] = {}
+
+                    def submit_next() -> Any | None:
+                        if self.cancel_event.is_set() or not job_queue:
+                            return None
+                        source, destination = job_queue.pop(0)
+                        future = pool.submit(
+                            _process_file_job,
+                            source,
+                            destination,
+                            self.specs,
+                            self.page_text_rule,
+                            self.process_cancel_event,
+                            progress_queue,
+                        )
+                        futures[future] = (source, destination)
+                        return future
+
+                    for _ in range(worker_count):
+                        submit_next()
                     pending = set(futures)
                     while pending:
                         try:
@@ -226,24 +365,38 @@ class ExportWorker(QObject):
                         except Empty:
                             pass
                         if self.cancel_event.is_set():
+                            self.process_cancel_event.set()
                             for future in pending:
                                 future.cancel()
-                            break
                         done, pending = wait(
                             pending, timeout=0.2, return_when=FIRST_COMPLETED
                         )
                         for future in done:
                             source, destination = futures[future]
-                            source_stat = source.stat()
                             key = job_key(BatchJob(source, destination))
                             try:
+                                source_stat = source.stat()
                                 future.result()
+                            except CancelledError:
+                                self.file_updated.emit(str(source), "Cancelled", 0)
+                                continue
                             except Exception as error:
+                                if self.cancel_event.is_set() and "batch cancelled" in str(error):
+                                    self.file_updated.emit(str(source), "Cancelled", 0)
+                                    continue
                                 failures += 1
+                                try:
+                                    source_stat = source.stat()
+                                    source_size = source_stat.st_size
+                                    source_mtime_ns = source_stat.st_mtime_ns
+                                except OSError:
+                                    source_size = 0
+                                    source_mtime_ns = 0
                                 manifest[key] = {
                                     "status": "failed", "error": str(error),
-                                    "source_size": source_stat.st_size,
-                                    "source_mtime_ns": source_stat.st_mtime_ns,
+                                    "source_size": source_size,
+                                    "source_mtime_ns": source_mtime_ns,
+                                    "settings_fingerprint": self.settings_fingerprint,
                                 }
                                 save_manifest(self.manifest_path, manifest)
                                 self.file_updated.emit(str(source), "Failed", 0)
@@ -253,6 +406,7 @@ class ExportWorker(QObject):
                                 manifest[key] = {
                                     "status": "completed", "source_size": source_stat.st_size,
                                     "source_mtime_ns": source_stat.st_mtime_ns,
+                                    "settings_fingerprint": self.settings_fingerprint,
                                 }
                                 save_manifest(self.manifest_path, manifest)
                                 self.file_progress.emit(str(source), 1, 1)
@@ -260,6 +414,10 @@ class ExportWorker(QObject):
                             self.progress.emit(
                                 int((completed + failures) * 100 / total), source.name
                             )
+                            next_future = submit_next()
+                            if next_future is not None:
+                                pending.add(next_future)
+                self.process_cancel_event = None
             if self.cancel_event.is_set():
                 self.finished.emit(
                     f"ยกเลิกแล้ว: สำเร็จ {completed} ไฟล์ | Workers: {worker_count}"
@@ -288,6 +446,8 @@ class MainWindow(QMainWindow):
         self._pending_batch_jobs: list[tuple[Path, Path]] = []
         self._last_export_jobs: list[tuple[Path, Path]] = []
         self._preview_bakes_overlays = True
+        self._preview_zoom = 1.0
+        self._preview_page_index = 0
         self._updating_properties = False
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
@@ -530,7 +690,8 @@ class MainWindow(QMainWindow):
         self._update_output_folder_button()
         setup_row.addWidget(output_group, 2)
         options_group = QGroupBox("Options")
-        options_row = QHBoxLayout(options_group)
+        options_layout = QVBoxLayout(options_group)
+        options_row = QHBoxLayout()
         self.recursive_input = QCheckBox("Recursive")
         self.recursive_input.setChecked(True)
         self.recursive_input.toggled.connect(self._recursive_toggled)
@@ -551,9 +712,13 @@ class MainWindow(QMainWindow):
         options_row.addWidget(QLabel("Workers"))
         options_row.addWidget(self.worker_count)
         self.preserve_structure = QCheckBox("รักษาโครงสร้าง")
-        self.preserve_structure.setChecked(True)
+        self.preserve_structure.setChecked(self._config.preserve_subfolders)
         self.preserve_structure.toggled.connect(self._batch_output_text_changed)
         options_row.addWidget(self.preserve_structure)
+        self.overwrite_outputs = QCheckBox("เขียนทับ output เดิม")
+        self.overwrite_outputs.setChecked(self._config.overwrite)
+        self.overwrite_outputs.toggled.connect(self._refresh_batch_readiness)
+        options_row.addWidget(self.overwrite_outputs)
         self.open_output_folder_on_finish = QCheckBox("เปิด Output เมื่อเสร็จ")
         self.open_output_folder_on_finish.setChecked(
             self._preferences.open_output_folder_on_finish
@@ -565,6 +730,34 @@ class MainWindow(QMainWindow):
             self._open_output_folder_preference_changed
         )
         options_row.addWidget(self.open_output_folder_on_finish)
+        options_layout.addLayout(options_row)
+        filter_row = QHBoxLayout()
+        self.page_filter_enabled = QCheckBox("เฉพาะหน้าที่พบคำ")
+        self.page_filter_enabled.toggled.connect(self._page_filter_changed)
+        self.page_filter_keyword = QLineEdit()
+        self.page_filter_keyword.setPlaceholderText("เช่น จำนวนเงิน หรือ regex")
+        self.page_filter_keyword.textChanged.connect(self._page_filter_changed)
+        self.page_filter_regex = QCheckBox("Regex")
+        self.page_filter_regex.toggled.connect(self._page_filter_changed)
+        self.page_filter_min = QSpinBox()
+        self.page_filter_min.setRange(1, 999)
+        self.page_filter_min.setValue(1)
+        self.page_filter_min.valueChanged.connect(self._page_filter_changed)
+        self.page_filter_max = QSpinBox()
+        self.page_filter_max.setRange(0, 999)
+        self.page_filter_max.setValue(10)
+        self.page_filter_max.setSpecialValueText("ไม่จำกัด")
+        self.page_filter_max.valueChanged.connect(self._page_filter_changed)
+        filter_row.addWidget(self.page_filter_enabled)
+        filter_row.addWidget(self.page_filter_keyword, 1)
+        filter_row.addWidget(self.page_filter_regex)
+        filter_row.addWidget(QLabel("จำนวน"))
+        filter_row.addWidget(self.page_filter_min)
+        filter_row.addWidget(QLabel("ถึง"))
+        filter_row.addWidget(self.page_filter_max)
+        filter_row.addWidget(QLabel("ครั้ง"))
+        options_layout.addLayout(filter_row)
+        self._page_filter_changed()
         setup_row.addWidget(options_group, 1)
         layout.addLayout(setup_row)
         self.queue_summary = QLabel("ยังไม่มีไฟล์ใน queue")
@@ -616,13 +809,41 @@ class MainWindow(QMainWindow):
         self.page_label = QLabel("หน้า 0 / 0")
         header.addWidget(self.preview_title)
         header.addStretch()
+        self.previous_page_button = QPushButton("<")
+        self.previous_page_button.setToolTip("Previous page")
+        self.previous_page_button.clicked.connect(self._previous_preview_page)
+        self.preview_page_number = QSpinBox()
+        self.preview_page_number.setRange(1, 1)
+        self.preview_page_number.setToolTip("Preview page")
+        self.preview_page_number.valueChanged.connect(self._preview_page_number_changed)
+        self.next_page_button = QPushButton(">")
+        self.next_page_button.setToolTip("Next page")
+        self.next_page_button.clicked.connect(self._next_preview_page)
+        header.addWidget(self.previous_page_button)
+        header.addWidget(self.preview_page_number)
+        header.addWidget(self.next_page_button)
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setToolTip("Zoom out")
+        self.zoom_out_button.clicked.connect(self._zoom_preview_out)
+        self.zoom_fit_button = QPushButton("Fit")
+        self.zoom_fit_button.setToolTip("Fit page to preview")
+        self.zoom_fit_button.clicked.connect(self._fit_preview)
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setToolTip("Zoom in")
+        self.zoom_in_button.clicked.connect(self._zoom_preview_in)
+        self.zoom_label = QLabel("Fit")
+        header.addWidget(self.zoom_out_button)
+        header.addWidget(self.zoom_fit_button)
+        header.addWidget(self.zoom_in_button)
+        header.addWidget(self.zoom_label)
         header.addWidget(self.page_label)
         layout.addLayout(header)
-        self.preview = QGraphicsView(self._scene)
+        self.preview = PreviewGraphicsView(self._scene, self)
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setBackgroundBrush(QColor("#252a33"))
         self.preview.setRenderHint(QPainter.RenderHint.Antialiasing)
         layout.addWidget(self.preview, 1)
+        self._update_page_controls()
         return panel
 
     def _build_properties_panel(self) -> QWidget:
@@ -752,7 +973,7 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _discover_fonts(self) -> list[str]:
-        directory = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+        directory = font_directory()
         return sorted(path.stem for path in directory.rglob("*.ttf")) or ["Arial"]
 
     def _populate_queue(self, jobs: list[tuple[Path, Path]]) -> None:
@@ -813,6 +1034,13 @@ class MainWindow(QMainWindow):
         self._apply_output_folder(Path(folder), "Output Folder พร้อมแล้ว")
 
     def _apply_output_folder(self, output: Path, summary: str) -> None:
+        if output_is_inside_input(self._input_root, output):
+            self._pending_batch_jobs = []
+            self.start_batch_action.setEnabled(False)
+            self._update_output_folder_button()
+            self.statusBar().showMessage("Output Folder ต้องไม่อยู่ภายใน Input Folder")
+            self._update_pipeline("Output Folder ซ้อนอยู่ใน Input Folder")
+            return
         self.batch_output_folder.setText(str(output))
         self._update_output_folder_button()
         self._preferences.output_folder = output
@@ -823,12 +1051,55 @@ class MainWindow(QMainWindow):
                 self._destination_for(source, output, self._input_root) for source in sources
             ]
             self._populate_queue(self._pending_batch_jobs)
-            self.start_batch_action.setEnabled(True)
-            self._update_queue_summary()
+            self._refresh_batch_readiness()
         self._update_pipeline(summary)
 
     def _recursive_toggled(self, checked: bool) -> None:
         self.max_depth.setEnabled(checked)
+
+    def _page_filter_changed(self, _value: Any = None) -> None:
+        if not hasattr(self, "page_filter_keyword"):
+            return
+        enabled = self.page_filter_enabled.isChecked()
+        self.page_filter_keyword.setEnabled(enabled)
+        self.page_filter_regex.setEnabled(enabled)
+        self.page_filter_min.setEnabled(enabled)
+        self.page_filter_max.setEnabled(enabled)
+        error = self._page_filter_error()
+        if error:
+            self.start_batch_action.setEnabled(False)
+            self._update_queue_summary()
+            self._update_pipeline(error)
+            return
+        if hasattr(self, "queue_table"):
+            self._refresh_batch_readiness()
+
+    def _page_filter_error(self) -> str | None:
+        if not self.page_filter_enabled.isChecked():
+            return None
+        keyword = self.page_filter_keyword.text().strip()
+        if not keyword:
+            return "ใส่คำหรือ regex ที่จะใช้กรองหน้าก่อนเริ่ม Batch"
+        if self.page_filter_regex.isChecked():
+            try:
+                re.compile(PageTextRule(keyword, use_regex=True).normalized_pattern())
+            except re.error as error:
+                return f"Regex ไม่ถูกต้อง: {error}"
+        return None
+
+    def _page_text_rule(self) -> PageTextRule | None:
+        if not self.page_filter_enabled.isChecked():
+            return None
+        keyword = self.page_filter_keyword.text().strip()
+        if not keyword:
+            return None
+        max_occurrences = self.page_filter_max.value()
+        return PageTextRule(
+            keyword=keyword,
+            min_occurrences=self.page_filter_min.value(),
+            max_occurrences=max_occurrences if max_occurrences > 0 else None,
+            use_regex=self.page_filter_regex.isChecked(),
+        )
 
     def _open_output_folder_preference_changed(self, checked: bool) -> None:
         self._preferences.open_output_folder_on_finish = checked
@@ -848,6 +1119,58 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(output_text))))
             return
         self.statusBar().showMessage("Output Folder ไม่ถูกต้องหรือยังไม่ได้เลือก")
+
+    def _preview_page_count(self) -> int:
+        if self._document is not None:
+            return self._document.page_count
+        if self._image_path is not None:
+            return 1
+        return 0
+
+    def _update_page_controls(self) -> None:
+        if not hasattr(self, "preview_page_number"):
+            return
+        page_count = self._preview_page_count()
+        has_pages = page_count > 0
+        if has_pages:
+            self._preview_page_index = min(max(0, self._preview_page_index), page_count - 1)
+            current_page = self._preview_page_index + 1
+            self.preview_page_number.blockSignals(True)
+            self.preview_page_number.setRange(1, page_count)
+            self.preview_page_number.setValue(current_page)
+            self.preview_page_number.blockSignals(False)
+            prefix = "รูปภาพ" if self._image_path is not None else "หน้า"
+            self.page_label.setText(f"{prefix} {current_page} / {page_count}")
+        else:
+            self._preview_page_index = 0
+            self.preview_page_number.blockSignals(True)
+            self.preview_page_number.setRange(1, 1)
+            self.preview_page_number.setValue(1)
+            self.preview_page_number.blockSignals(False)
+            self.page_label.setText("หน้า 0 / 0")
+        can_change_pages = self._document is not None and page_count > 1
+        self.preview_page_number.setEnabled(can_change_pages)
+        self.previous_page_button.setEnabled(can_change_pages and self._preview_page_index > 0)
+        self.next_page_button.setEnabled(
+            can_change_pages and self._preview_page_index < page_count - 1
+        )
+
+    def _preview_page_number_changed(self, page_number: int) -> None:
+        page_count = self._preview_page_count()
+        if page_count <= 0:
+            return
+        next_index = min(max(0, page_number - 1), page_count - 1)
+        if next_index == self._preview_page_index:
+            return
+        self._preview_page_index = next_index
+        self._update_page_controls()
+        self._refresh_preview()
+
+    def _previous_preview_page(self) -> None:
+        self.preview_page_number.setValue(self._preview_page_index)
+
+    def _next_preview_page(self) -> None:
+        self.preview_page_number.setValue(self._preview_page_index + 2)
 
     def _choose_batch_input_folder(self) -> None:
         initial = self.batch_input_folder.text().strip() or str(
@@ -900,7 +1223,7 @@ class MainWindow(QMainWindow):
             self._destination_for(source, output, input_root) for source in sources
         ]
         self._populate_queue(self._pending_batch_jobs)
-        self.start_batch_action.setEnabled(True)
+        self._refresh_batch_readiness()
         self.statusBar().showMessage(
             f"โหลดจาก Folder แล้ว {len(sources)} ไฟล์ — พร้อมเริ่ม Batch"
         )
@@ -929,7 +1252,13 @@ class MainWindow(QMainWindow):
     def _refresh_batch_readiness(self) -> None:
         self._pending_batch_jobs = self._queue_jobs_from_table()
         is_running = self._worker is not None and self.cancel_action.isEnabled()
-        self.start_batch_action.setEnabled(bool(self._pending_batch_jobs) and not is_running)
+        page_filter_ready = self._page_filter_error() is None
+        self.start_batch_action.setEnabled(
+            bool(self._pending_batch_jobs)
+            and not is_running
+            and page_filter_ready
+            and self._has_effective_overlay()
+        )
         self._update_queue_summary()
 
     def _destination_for(
@@ -944,7 +1273,12 @@ class MainWindow(QMainWindow):
                 relative_parent = source.resolve().parent.relative_to(input_root.resolve())
             except ValueError:
                 relative_parent = Path()
-        return source, output_folder / relative_parent / f"{source.stem}-watermask{source.suffix}"
+        return (
+            source,
+            output_folder
+            / relative_parent
+            / f"{source.stem}{self._config.output_suffix}{source.suffix}",
+        )
 
     @staticmethod
     def _is_valid_output_folder(output: Path) -> bool:
@@ -1014,8 +1348,7 @@ class MainWindow(QMainWindow):
         self._pending_batch_jobs = [
             job for job in self._pending_batch_jobs if job[0] not in removed_sources
         ]
-        self.start_batch_action.setEnabled(bool(self._pending_batch_jobs))
-        self._update_queue_summary()
+        self._refresh_batch_readiness()
         self._update_pipeline()
 
     def _clear_queue(self) -> None:
@@ -1030,7 +1363,7 @@ class MainWindow(QMainWindow):
         self._update_pipeline("ล้าง Queue แล้ว")
 
     def _font_path(self, name: str) -> Path | None:
-        directory = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+        directory = font_directory()
         return next(directory.rglob(f"{name}.ttf"), None)
 
     def _preview_font(self, name: str, point_size: int) -> QFont:
@@ -1074,7 +1407,6 @@ class MainWindow(QMainWindow):
             )
             if output_text and self._is_valid_output_folder(Path(output_text)):
                 self._pending_batch_jobs = [(sources[0], destination)]
-                self.start_batch_action.setEnabled(True)
                 self.statusBar().showMessage(
                     "พร้อมเริ่ม 1 ไฟล์ — กด Start Batch เพื่อเริ่ม"
                 )
@@ -1082,6 +1414,7 @@ class MainWindow(QMainWindow):
                 self._pending_batch_jobs = []
                 self.start_batch_action.setEnabled(False)
             self._populate_queue([(sources[0], destination)])
+            self._refresh_batch_readiness()
             self._update_pipeline()
             return
         self._load_source(sources[0])
@@ -1100,7 +1433,7 @@ class MainWindow(QMainWindow):
             self._destination_for(source, output_path) for source in sources
         ]
         self._populate_queue(self._pending_batch_jobs)
-        self.start_batch_action.setEnabled(True)
+        self._refresh_batch_readiness()
         self.statusBar().showMessage(
             f"พร้อมเริ่ม Batch: {len(sources)} ไฟล์ → {output_path} | กด Start Batch"
         )
@@ -1121,8 +1454,9 @@ class MainWindow(QMainWindow):
             self._pdf_path = pdf_path
             self._image_path = None
             self._preview_bakes_overlays = preview_overlays
+            self._preview_page_index = 0
             self.preview_title.setText(self._pdf_path.name)
-            self.page_label.setText(f"หน้า 1 / {self._document.page_count}")
+            self._update_page_controls()
             self.statusBar().showMessage(f"เปิดไฟล์แล้ว: {self._pdf_path}")
             self._refresh_preview()
         except Exception as error:
@@ -1136,8 +1470,9 @@ class MainWindow(QMainWindow):
         self._pdf_path = None
         self._image_path = image_path
         self._preview_bakes_overlays = preview_overlays
+        self._preview_page_index = 0
         self.preview_title.setText(image_path.name)
-        self.page_label.setText("รูปภาพ 1 / 1")
+        self._update_page_controls()
         self.statusBar().showMessage(f"เปิดไฟล์แล้ว: {image_path}")
         self._refresh_preview()
 
@@ -1348,9 +1683,71 @@ class MainWindow(QMainWindow):
             if item.get("type") is not OverlayType.IMAGE:
                 continue
             asset_path = str(item.get("asset_path", "")).strip()
-            if asset_path and not Path(asset_path).exists():
+            if not asset_path:
+                missing.append(f"{item.get('id', 'logo')}: ยังไม่ได้เลือกไฟล์ Logo")
+            elif not Path(asset_path).exists():
                 missing.append(asset_path)
         return missing
+
+    def _has_effective_overlay(self) -> bool:
+        for item in self._overlays:
+            if item.get("type") is OverlayType.TEXT and str(item.get("text", "")).strip():
+                return True
+            if item.get("type") is OverlayType.IMAGE and str(item.get("asset_path", "")).strip():
+                return True
+        return False
+
+    def _output_conflict_issues(
+        self,
+        jobs: list[tuple[Path, Path]],
+        manifest_path: Path,
+        settings_fingerprint: str,
+    ) -> list[str]:
+        if self.overwrite_outputs.isChecked():
+            return []
+        manifest = load_manifest(manifest_path) if self._config.resume_enabled else {}
+        issues: list[str] = []
+        for source, destination in jobs:
+            if not destination.exists():
+                continue
+            if self._config.resume_enabled and self._is_resume_match(
+                source,
+                destination,
+                manifest,
+                settings_fingerprint,
+            ):
+                continue
+            issues.append(str(destination))
+        return issues
+
+    @staticmethod
+    def _is_resume_match(
+        source: Path,
+        destination: Path,
+        manifest: dict[str, dict[str, str | int]],
+        settings_fingerprint: str,
+    ) -> bool:
+        try:
+            source_stat = source.stat()
+        except OSError:
+            return False
+        record = manifest.get(job_key(BatchJob(source, destination)), {})
+        return (
+            record.get("status") == "completed"
+            and record.get("source_size") == source_stat.st_size
+            and record.get("source_mtime_ns") == source_stat.st_mtime_ns
+            and record.get("settings_fingerprint") == settings_fingerprint
+        )
+
+    @staticmethod
+    def _output_root_write_error(output_root: Path) -> str | None:
+        try:
+            output_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=output_root, delete=True):
+                pass
+        except OSError as error:
+            return str(error)
+        return None
 
     def _show_about_dev(self) -> None:
         QMessageBox.about(self, "About Dev", self._about_dev_text())
@@ -1596,6 +1993,15 @@ class MainWindow(QMainWindow):
             self._update_queue_summary()
 
     def _start_export(self, jobs: list[tuple[Path, Path]]) -> bool:
+        page_filter_error = self._page_filter_error()
+        if page_filter_error:
+            QMessageBox.warning(
+                self,
+                "เงื่อนไขหน้ายังไม่ครบ",
+                page_filter_error,
+            )
+            self._refresh_batch_readiness()
+            return False
         missing_logos = self._missing_logo_paths(self._overlays)
         if missing_logos:
             QMessageBox.warning(
@@ -1612,14 +2018,60 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Batch Preflight ไม่ผ่าน", details)
             self._refresh_batch_readiness()
             return False
+        output_text = self.batch_output_folder.text().strip()
+        output_root = Path(output_text) if output_text else jobs[0][1].parent
+        if output_is_inside_input(self._input_root, output_root):
+            QMessageBox.warning(
+                self,
+                "Output Folder ไม่ปลอดภัย",
+                "Output Folder ต้องไม่อยู่ภายใน Input Folder เพื่อกันการประมวลผลไฟล์ output ซ้ำ",
+            )
+            self._refresh_batch_readiness()
+            return False
+        if not self._has_effective_overlay():
+            QMessageBox.warning(
+                self,
+                "ยังไม่มี Overlay",
+                "กรุณาเพิ่มข้อความหรือเลือกไฟล์ Logo ก่อน Export",
+            )
+            self._refresh_batch_readiness()
+            return False
+        write_error = self._output_root_write_error(output_root)
+        if write_error:
+            QMessageBox.warning(
+                self,
+                "Output Folder เขียนไม่ได้",
+                f"ไม่สามารถเขียนไฟล์ทดสอบใน Output Folder ได้:\n{write_error}",
+            )
+            self._refresh_batch_readiness()
+            return False
+        specs = self._to_specs()
+        page_text_rule = self._page_text_rule()
+        settings_fingerprint = _settings_fingerprint(specs, page_text_rule)
+        manifest_path = output_root / ".mtpdflogo-batch-status.json"
+        output_conflicts = self._output_conflict_issues(
+            jobs,
+            manifest_path,
+            settings_fingerprint,
+        )
+        if output_conflicts:
+            QMessageBox.warning(
+                self,
+                "Output มีอยู่แล้ว",
+                "พบ output เดิมและยังไม่ได้เปิดเขียนทับ:\n"
+                + "\n".join(output_conflicts[:8]),
+            )
+            self._refresh_batch_readiness()
+            return False
         self._last_export_jobs = jobs
         self._thread = QThread(self)
-        manifest_path = jobs[0][1].parent / ".mtpdflogo-batch-status.json"
         self._worker = ExportWorker(
             jobs,
-            self._to_specs(),
+            specs,
+            page_text_rule,
             manifest_path,
             self.worker_count.value(),
+            self._config.resume_enabled,
         )
         self.cancel_action.setEnabled(True)
         self._update_pipeline("กำลังประมวลผล")
@@ -1648,11 +2100,11 @@ class MainWindow(QMainWindow):
             self._mark_unfinished_rows_cancelled()
         self._refresh_batch_readiness()
         self.statusBar().showMessage(message)
-        if self._last_export_jobs:
-            output_preview = self._last_export_jobs[0][1]
-            if output_preview.exists():
-                self._load_source(output_preview, preview_overlays=False)
-                self.statusBar().showMessage(f"เสร็จสิ้น — Preview Output: {output_preview}")
+        if self._last_export_jobs and self._source_path == self._last_export_jobs[0][1]:
+            self._load_source(self._last_export_jobs[0][0], preview_overlays=True)
+            self.statusBar().showMessage(
+                f"เสร็จสิ้น — Settings ยังแก้ต่อได้: {self._last_export_jobs[0][1]}"
+            )
         if self._is_successful_finish_message(message):
             self._open_finished_output_folder()
         self._update_pipeline("เสร็จสิ้น — ตรวจ Output ได้แล้ว")
@@ -1704,9 +2156,34 @@ class MainWindow(QMainWindow):
         self._refresh_preview()
         self._update_pipeline()
 
+    def _zoom_preview_in(self) -> None:
+        self._set_preview_zoom(self._preview_zoom * 1.25)
+
+    def _zoom_preview_out(self) -> None:
+        self._set_preview_zoom(self._preview_zoom / 1.25)
+
+    def _fit_preview(self) -> None:
+        self._set_preview_zoom(1.0)
+
+    def _set_preview_zoom(self, zoom: float) -> None:
+        self._preview_zoom = min(4.0, max(0.25, zoom))
+        self._apply_preview_zoom()
+
+    def _apply_preview_zoom(self) -> None:
+        if not hasattr(self, "preview") or self._scene.sceneRect().isEmpty():
+            return
+        self.preview.resetTransform()
+        self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if self._preview_zoom != 1.0:
+            self.preview.scale(self._preview_zoom, self._preview_zoom)
+        if hasattr(self, "zoom_label"):
+            label = "Fit" if self._preview_zoom == 1.0 else f"{round(self._preview_zoom * 100)}%"
+            self.zoom_label.setText(label)
+
     def _refresh_preview(self) -> None:
         self._scene.clear()
         if self._image_path is not None:
+            self._update_page_controls()
             pixmap = QPixmap(str(self._image_path))
             if pixmap.isNull():
                 return
@@ -1714,11 +2191,13 @@ class MainWindow(QMainWindow):
             if self._preview_bakes_overlays:
                 self._draw_preview_overlays(pixmap.width(), pixmap.height())
             self._scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
-            self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self._apply_preview_zoom()
             return
         if self._document is None or self._document.page_count == 0:
+            self._update_page_controls()
             return
-        page = self._document[0]
+        self._update_page_controls()
+        page = self._document[self._preview_page_index]
         pixmap = page.get_pixmap(matrix=fitz.Matrix(1.25, 1.25), alpha=False)
         image = QImage(
             pixmap.samples,
@@ -1730,11 +2209,11 @@ class MainWindow(QMainWindow):
         self._scene.addPixmap(QPixmap.fromImage(image))
         if not self._preview_bakes_overlays:
             self._scene.setSceneRect(0, 0, pixmap.width, pixmap.height)
-            self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self._apply_preview_zoom()
             return
         self._draw_preview_overlays(pixmap.width, pixmap.height)
         self._scene.setSceneRect(0, 0, pixmap.width, pixmap.height)
-        self.preview.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._apply_preview_zoom()
 
     def _draw_preview_overlays(self, preview_width: int, preview_height: int) -> None:
         selected = self._selected_model()
@@ -1831,6 +2310,20 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: Any) -> None:
+        if self._worker is not None and self.cancel_action.isEnabled():
+            answer = QMessageBox.question(
+                self,
+                "Batch กำลังทำงาน",
+                "ต้องการหยุด Batch ก่อนปิดโปรแกรมหรือไม่?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self._cancel_export()
+            event.ignore()
+            return
         if self._document:
             self._document.close()
         event.accept()

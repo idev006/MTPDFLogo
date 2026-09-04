@@ -1,9 +1,10 @@
 from pathlib import Path
 
+import fitz
 import pytest
 from mtpdflogo.config.overlay_preset import save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.presentation.main_window import MainWindow
+from mtpdflogo.presentation.main_window import DraggableTextItem, MainWindow
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -74,6 +75,84 @@ def test_properties_panel_uses_scrollable_tabs(qtbot) -> None:
     ]
 
 
+def test_preview_zoom_persists_without_and_with_overlay(qtbot, tmp_path) -> None:
+    image = tmp_path / "source.png"
+    Image.new("RGB", (200, 100), "white").save(image)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_image(image)
+
+    window.zoom_in_button.click()
+    zoomed_transform = window.preview.transform()
+
+    assert window._preview_zoom == 1.25
+    assert window.zoom_label.text() == "125%"
+
+    window._refresh_preview()
+
+    assert window._preview_zoom == 1.25
+    assert window.preview.transform().m11() == pytest.approx(zoomed_transform.m11())
+
+    window._append_overlay(OverlayType.TEXT)
+
+    assert window._preview_zoom == 1.25
+    assert window.preview.transform().m11() == pytest.approx(zoomed_transform.m11())
+
+    window.zoom_fit_button.click()
+
+    assert window._preview_zoom == 1.0
+    assert window.zoom_label.text() == "Fit"
+
+
+def test_pdf_preview_can_switch_pages_before_positioning(qtbot, tmp_path) -> None:
+    source = tmp_path / "mixed-pages.pdf"
+    document = fitz.open()
+    document.new_page(width=400, height=200)
+    document.new_page(width=200, height=400)
+    document.save(source)
+    document.close()
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._load_pdf(source)
+
+    assert window.page_label.text() == "หน้า 1 / 2"
+    assert window.preview_page_number.isEnabled()
+    assert window._scene.sceneRect().width() == pytest.approx(500)
+    assert window._scene.sceneRect().height() == pytest.approx(250)
+
+    window.next_page_button.click()
+
+    assert window._preview_page_index == 1
+    assert window.preview_page_number.value() == 2
+    assert window.page_label.text() == "หน้า 2 / 2"
+    assert window._scene.sceneRect().width() == pytest.approx(250)
+    assert window._scene.sceneRect().height() == pytest.approx(500)
+    assert not window.next_page_button.isEnabled()
+
+
+def test_dragging_overlay_uses_current_preview_page_geometry(qtbot, tmp_path) -> None:
+    source = tmp_path / "position-page.pdf"
+    document = fitz.open()
+    document.new_page(width=400, height=200)
+    document.new_page(width=200, height=400)
+    document.save(source)
+    document.close()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_pdf(source)
+    window._append_overlay(OverlayType.TEXT)
+    window.next_page_button.click()
+    dragged = QGraphicsTextItem("dragged")
+    dragged.setPos(115, 240)
+
+    window._preview_item_dropped("overlay-1", dragged)
+
+    assert window._overlays[0]["position_mode"] is PositionMode.ABSOLUTE
+    assert window._overlays[0]["x_percent"] == pytest.approx(50, abs=10)
+    assert window._overlays[0]["y_percent"] == pytest.approx(50, abs=10)
+
+
 def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
@@ -87,6 +166,7 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
     assert window.worker_count.value() >= 1
     assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
+    assert window.page_filter_enabled.text() == "เฉพาะหน้าที่พบคำ"
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
@@ -135,6 +215,22 @@ def test_preview_drop_updates_only_dragged_item_to_absolute(qtbot) -> None:
     assert 45 <= window._overlays[0]["y_percent"] <= 55
     assert window._overlays[1]["position_mode"] is PositionMode.PRESET
     assert window.position_mode.currentData() == PositionMode.ABSOLUTE
+
+
+def test_clicking_preview_item_without_moving_keeps_preset_position(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    graphic = DraggableTextItem("dragged", "overlay-1", window)
+    graphic.setPos(40, 40)
+
+    assert window._overlays[0]["position_mode"] is PositionMode.PRESET
+
+    graphic._press_pos = graphic.pos()
+    if (graphic.pos() - graphic._press_pos).manhattanLength() >= 2:
+        window._preview_item_dropped("overlay-1", graphic)
+
+    assert window._overlays[0]["position_mode"] is PositionMode.PRESET
 
 
 def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypatch) -> None:
@@ -346,6 +442,7 @@ def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) ->
     output.mkdir()
     window = MainWindow()
     qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
     window._populate_queue([(source, Path())])
 
     window.batch_output_folder.setText(str(output))
@@ -360,6 +457,37 @@ def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) ->
     window.worker_count.setValue(min(window.worker_count.maximum(), 3))
 
     assert f"Workers: {window.worker_count.value()}" in window.queue_summary.text()
+
+
+def test_destination_uses_configured_output_suffix(qtbot, tmp_path) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "out"
+    output.mkdir()
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._config = type(
+        "Config",
+        (),
+        {"output_suffix": "-signed", "preserve_subfolders": True},
+    )()
+
+    assert window._destination_for(source, output)[1] == output / "input-signed.pdf"
+
+
+def test_start_batch_requires_effective_overlay(qtbot, tmp_path) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "out"
+    source.touch()
+    output.mkdir()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._populate_queue([(source, Path())])
+
+    window.batch_output_folder.setText(str(output))
+    qtbot.keyClick(window.batch_output_folder, Qt.Key.Key_Enter)
+
+    assert not window.start_batch_action.isEnabled()
 
 
 def test_manual_open_output_folder_button(qtbot, tmp_path, monkeypatch) -> None:
@@ -406,6 +534,127 @@ def test_export_preflight_blocks_missing_logo_asset(qtbot, tmp_path, monkeypatch
     assert str(missing_logo) in warnings[0]
 
 
+def test_export_preflight_blocks_blank_logo_asset(qtbot, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    warnings: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.IMAGE, "")
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    assert not window._start_export([(source, destination)])
+    assert "ยังไม่ได้เลือกไฟล์ Logo" in warnings[0]
+
+
+def test_export_preflight_blocks_existing_output_without_overwrite(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "out"
+    destination = output / "input-watermask.pdf"
+    source.touch()
+    output.mkdir()
+    destination.touch()
+    warnings: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    window.batch_output_folder.setText(str(output))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    assert not window._start_export([(source, destination)])
+    assert str(destination) in warnings[0]
+
+
+def test_output_folder_inside_input_is_blocked(qtbot, tmp_path, monkeypatch) -> None:
+    input_root = tmp_path / "input"
+    output = input_root / "out"
+    source = input_root / "input.pdf"
+    destination = output / "input-watermask.pdf"
+    output.mkdir(parents=True)
+    source.touch()
+    warnings: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._input_root = input_root
+    window._append_overlay(OverlayType.TEXT)
+    window.batch_output_folder.setText(str(output))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    assert not window._start_export([(source, destination)])
+    assert "Output Folder ต้องไม่อยู่ภายใน Input Folder" in warnings[0]
+
+
+def test_output_conflict_is_ignored_when_overwrite_is_checked(qtbot, tmp_path) -> None:
+    source = tmp_path / "input.pdf"
+    output = tmp_path / "out"
+    destination = output / "input-watermask.pdf"
+    source.touch()
+    output.mkdir()
+    destination.touch()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.overwrite_outputs.setChecked(True)
+
+    assert window._output_conflict_issues(
+        [(source, destination)],
+        output / ".mtpdflogo-batch-status.json",
+        "fingerprint",
+    ) == []
+
+
+def test_page_filter_requires_keyword_before_export(qtbot, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    warnings: list[str] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    window.page_filter_enabled.setChecked(True)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    assert not window._start_export([(source, destination)])
+    assert "ใส่คำหรือ regex" in warnings[0]
+
+
+def test_page_filter_builds_text_rule(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window._page_text_rule() is None
+
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_keyword.setText("จำนวนเงิน")
+    window.page_filter_regex.setChecked(True)
+    window.page_filter_min.setValue(1)
+    window.page_filter_max.setValue(10)
+
+    rule = window._page_text_rule()
+
+    assert rule is not None
+    assert rule.keyword == "จำนวนเงิน"
+    assert rule.min_occurrences == 1
+    assert rule.max_occurrences == 10
+    assert rule.use_regex
+
+
+def test_page_filter_rejects_invalid_regex(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_regex.setChecked(True)
+    window.page_filter_keyword.setText("[")
+
+    assert window._page_filter_error() is not None
+    assert "Regex ไม่ถูกต้อง" in window.pipeline_summary.text()
+
+
 def test_batch_controls_are_ready_after_export_finished_without_clearing(
     qtbot, tmp_path, monkeypatch
 ) -> None:
@@ -415,6 +664,7 @@ def test_batch_controls_are_ready_after_export_finished_without_clearing(
     destination.parent.mkdir()
     window = MainWindow()
     qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     window._populate_queue([(source, destination)])
     window._pending_batch_jobs = [(source, destination)]
@@ -428,6 +678,31 @@ def test_batch_controls_are_ready_after_export_finished_without_clearing(
     assert window.start_batch_action.isEnabled()
     assert window._pending_batch_jobs == [(source, destination)]
     assert "พร้อมเริ่ม" in window.queue_summary.text()
+
+
+def test_export_finished_keeps_editable_source_preview(qtbot, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    destination.touch()
+    loaded: list[tuple[Path, bool]] = []
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window,
+        "_load_source",
+        lambda path, preview_overlays=True: loaded.append((path, preview_overlays)),
+    )
+    window._source_path = source
+    window._last_export_jobs = [(source, destination)]
+
+    window._export_finished("สำเร็จ 1 ไฟล์, ล้มเหลว 0 ไฟล์ | Workers: 1")
+
+    assert loaded == []
+    assert window._preview_bakes_overlays
 
 
 def test_open_output_checkbox_updates_preferences(qtbot, monkeypatch) -> None:
@@ -456,6 +731,7 @@ def test_successful_export_opens_output_folder_when_requested(
     opened: list[str] = []
     window = MainWindow()
     qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "mtpdflogo.presentation.main_window.QDesktopServices.openUrl",
@@ -480,6 +756,7 @@ def test_output_folder_is_not_opened_when_unchecked_cancelled_or_partial_failure
     opened: list[str] = []
     window = MainWindow()
     qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "mtpdflogo.presentation.main_window.QDesktopServices.openUrl",
@@ -516,6 +793,7 @@ def test_cancel_button_marks_active_rows_and_restores_ready_state(
     completed_destination.parent.mkdir()
     window = MainWindow()
     qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     window._populate_queue([
         (completed_source, completed_destination),
@@ -540,6 +818,46 @@ def test_cancel_button_marks_active_rows_and_restores_ready_state(
     assert window.queue_table.item(1, 5).text() == "Cancelled"
     assert not window.cancel_action.isEnabled()
     assert window.start_batch_action.isEnabled()
+
+
+def test_close_during_export_requests_cancel_and_ignores_event(
+    qtbot, monkeypatch
+) -> None:
+    class FakeWorker:
+        def __init__(self) -> None:
+            self.cancel_called = False
+
+        def cancel(self) -> None:
+            self.cancel_called = True
+
+    class FakeEvent:
+        def __init__(self) -> None:
+            self.ignored = False
+            self.accepted = False
+
+        def ignore(self) -> None:
+            self.ignored = True
+
+        def accept(self) -> None:
+            self.accepted = True
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    worker = FakeWorker()
+    event = FakeEvent()
+    window._worker = worker
+    window.cancel_action.setEnabled(True)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.closeEvent(event)
+
+    assert worker.cancel_called
+    assert event.ignored
+    assert not event.accepted
 
 
 def test_properties_controls_match_selected_text_and_logo_items(qtbot, tmp_path) -> None:
@@ -645,6 +963,7 @@ def test_input_folder_load_preserves_source_structure(qtbot, tmp_path) -> None:
     Image.new("RGB", (10, 10), "white").save(customer / "nested.png")
     window = MainWindow()
     qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
 
     window.batch_input_folder.setText(str(input_root))
     window.batch_output_folder.setText(str(output))

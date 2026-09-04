@@ -15,6 +15,8 @@
 - แต่ละรายการตั้งค่าแยกกันได้อย่างอิสระ
 - ผู้ใช้ต้องวาง Text/Logo ได้ 2 วิธี: เลือกตำแหน่งมาตรฐานจาก dropdown 9 จุด หรือ drag-and-drop วางอิสระบน preview
 - ตำแหน่งแบบ drag-and-drop ต้องเก็บเป็น absolute percent ของหน้า (`x_percent`, `y_percent`) ไม่ใช่ screen pixel
+- ผู้ใช้ต้องเลือกหน้า preview ของ PDF ได้ก่อนวาง Text/Logo เพื่อให้การวางตำแหน่งอ้างอิงหน้าที่ต้องการ ไม่จำกัดหน้าแรก
+- Preview ต้องซูมเข้า/ออกและ Fit ได้ โดยการ redraw จากการแก้ Text/Logo ต้องไม่รีเซ็ต zoom
 - UI ต้องมีทางเลือกที่ชัดเจนสำหรับเพิ่ม Text+Logo พร้อมกันใน workflow เดียว
 - ประมวลผลหลาย PDF/รูปภาพแบบแยกไฟล์ ไม่รวม PDF
 - รองรับ PDF แนวตั้ง แนวนอน และเอกสารที่มี orientation ผสมกันภายในไฟล์เดียว
@@ -32,7 +34,8 @@
 - Batch output ต้องเป็นหนึ่ง output ต่อหนึ่ง input และรักษาโครงสร้าง subfolder ได้เมื่อเลือกใช้
 - ในแต่ละไฟล์ประมวลผลทีละหน้าและใช้ parallel ระดับไฟล์
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI
-- ต้องรองรับ pytest และ PyInstaller
+- ผู้ใช้ต้องกรองหน้า PDF ตามจำนวนคำหรือ regex ที่พบในหน้านั้นได้ โดยนับจาก text layer ของ PDF และ normalize ภาษาไทยก่อนเทียบ
+- ต้องรองรับ pytest และ zip installer สำหรับ Windows ที่สร้าง `.venv` ด้วย `py -3.12`
 
 ## Performance baseline
 
@@ -74,10 +77,14 @@
 - หลัง export เสร็จ ผู้ใช้ต้องสามารถล้าง queue เดิมและเลือกไฟล์ชุดใหม่เพื่อเริ่มรอบใหม่ได้โดยไม่ต้องปิดโปรแกรม
 - หลัง export เสร็จ controls ต้องกลับสู่สถานะพร้อมใช้งานโดยไม่บังคับให้ผู้ใช้เคลียร์ค่าเดิม: ปุ่ม Start ต้องกลับมา enabled เมื่อ queue/output ยัง valid และปุ่ม Cancel ต้อง disabled
 - ระบบต้องแสดง output folder ปัจจุบันอย่างชัดเจน และตรวจสอบสิทธิ์เขียน/พื้นที่ว่างก่อนเริ่ม
+- Output Folder ต้องไม่อยู่ภายใน Input Folder เพื่อป้องกันการประมวลผลไฟล์ output ซ้ำในรอบถัดไป
+- ถ้า `overwrite = false` ผู้ใช้ต้องเปิดตัวเลือกเขียนทับอย่างชัดเจนก่อนแทนที่ output เดิม ยกเว้นกรณี resume ที่ manifest ยืนยันว่า output นั้นเสร็จแล้วด้วย settings เดิม
+- Batch ต้องมี overlay ที่ทำงานจริงอย่างน้อยหนึ่งรายการก่อนเริ่ม: text ต้องไม่ว่าง และ logo ต้องมีไฟล์ที่มีอยู่จริง
 - ห้าม merge หรือ combine PDF หลายไฟล์
 - ไฟล์หนึ่งล้มเหลวต้องไม่หยุดไฟล์อื่นเมื่อ `continue_on_error = true`
 - สถานะต้องแยกต่อไฟล์: `pending`, `processing`, `completed`, `failed`, `cancelled`
 - ปุ่มหยุด Batch ต้องเป็น safe cancel: หยุดรับงานใหม่/ยกเลิกงานที่ยังไม่เริ่ม, แสดง `Stopping` ระหว่างหยุด, แล้ว mark งานที่ไม่เสร็จเป็น `Cancelled` โดยไม่ทำลาย output ที่เขียนเสร็จแล้ว
+- การปิดโปรแกรมระหว่าง Batch ต้องไม่ปิดทันทีโดยปล่อย worker เขียนไฟล์ต่อแบบเงียบ ๆ ต้องถามผู้ใช้และสั่ง cancel ก่อน
 - Worker หนึ่งตัวรับผิดชอบ PDF หนึ่งไฟล์ในช่วงเวลาหนึ่ง
 - ภายในไฟล์ประมวลผลทีละหน้าแบบ streaming
 - Worker หนึ่งตัวรับผิดชอบรูปภาพหนึ่งไฟล์ในช่วงเวลาหนึ่ง และรายงาน progress เป็น 1/1
@@ -98,7 +105,10 @@
 - Position ใช้ preset 9 จุด พร้อม offset/margin
 - Position mode มี 2 แบบ: `preset` สำหรับ dropdown และ `absolute` สำหรับ drag-and-drop/free position
 - Absolute position ใช้ anchor center ใน MVP และต้องคำนวณจากขนาดหน้าจริงของ PDF/Image แต่ละหน้า
+- การคลิกเลือก overlay บน preview โดยไม่ได้ลาก ต้องไม่เปลี่ยน `preset` เป็น `absolute`
 - ตำแหน่งต้องคำนวณใหม่จาก `page.rect` ของแต่ละหน้า ห้ามใช้ขนาดหน้าคงที่
+- PDF/Image logo export ต้องใช้ contract เดียวกัน: resize content ก่อน rotate แล้ว anchor จาก transformed bounds
 - Opacity ใช้ช่วง 0.0–1.0
 - Font discovery จะอ่านจาก configured font directory
 - PDF text export ต้องใช้ renderer ที่รองรับ Thai/Unicode glyphs จาก font ที่เลือกจริง ห้ามปล่อยให้ข้อความไทยกลายเป็น `????`
+- Runtime resources เช่น config และ fonts ต้องโหลดได้ทั้ง source tree, editable install, package install, และ zip installer layout

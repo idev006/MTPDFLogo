@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -33,6 +35,46 @@ class PdfOverlaySpec:
     margin_pt: float = 18.0
     enabled: bool = True
     z_index: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PageTextRule:
+    keyword: str
+    min_occurrences: int = 1
+    max_occurrences: int | None = None
+    case_sensitive: bool = False
+    use_regex: bool = False
+
+    def normalized_pattern(self) -> str:
+        return unicodedata.normalize("NFKD", self.keyword)
+
+    def count_occurrences(self, text: str) -> int:
+        if self.use_regex:
+            flags = 0 if self.case_sensitive else re.IGNORECASE
+            content = unicodedata.normalize("NFKD", text)
+            return len(re.findall(self.normalized_pattern(), content, flags))
+        keyword = _searchable_text(self.keyword, self.case_sensitive)
+        content = _searchable_text(text, self.case_sensitive)
+        return content.count(keyword)
+
+    def matches(self, text: str) -> bool:
+        count = self.count_occurrences(text)
+        if count < self.min_occurrences:
+            return False
+        if self.max_occurrences is not None and count > self.max_occurrences:
+            return False
+        return True
+
+
+def _searchable_text(value: str, case_sensitive: bool) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    if not case_sensitive:
+        normalized = normalized.casefold()
+    return "".join(normalized.split())
+
+
+def _requires_explicit_font(value: str) -> bool:
+    return any(ord(character) > 127 for character in value)
 
 
 def _anchor_rect(
@@ -72,6 +114,10 @@ def _apply_text_as_image(
     if not spec.text:
         return
     scale = 3
+    if _requires_explicit_font(spec.text) and (
+        spec.font_path is None or not spec.font_path.exists()
+    ):
+        raise FileNotFoundError("Unicode/Thai text overlay requires a bundled font")
     font = (
         ImageFont.truetype(str(spec.font_path), max(1, round(spec.font_size * scale)))
         if spec.font_path and spec.font_path.exists()
@@ -118,16 +164,18 @@ def _apply_image(
         raise FileNotFoundError(f"Logo asset not found: {spec.asset_path}")
     with Image.open(spec.asset_path) as source_image:
         image = source_image.convert("RGBA")
+        target_width = max(1, round(page_rect.width * spec.width_percent / 100))
+        target_height = max(1, round(target_width * image.height / image.width))
+        image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
         if spec.opacity < 1.0:
             alpha = image.getchannel("A").point(lambda value: round(value * spec.opacity))
             image.putalpha(alpha)
         if spec.rotation % 360:
             image = image.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
-        aspect = image.height / image.width
-    width = page_rect.width * spec.width_percent / 100
-    height = width * aspect
+    width = image.width
+    height = image.height
     rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
-    cache_key = (spec.asset_path, round(spec.opacity, 4), spec.rotation)
+    cache_key = (spec.asset_path, round(spec.opacity, 4), spec.rotation, round(width, 2))
     xref = image_xrefs.get(cache_key)
     if xref is None:
         stream = BytesIO()
@@ -135,13 +183,14 @@ def _apply_image(
         xref = page.insert_image(rect, stream=stream.getvalue())
         image_xrefs[cache_key] = xref
     else:
-        page.insert_image(rect, xref=xref, rotate=spec.rotation)
+        page.insert_image(rect, xref=xref, overlay=True)
 
 
 def apply_overlays(
     source: Path,
     destination: Path,
     overlays: list[PdfOverlaySpec],
+    page_text_rule: PageTextRule | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
@@ -157,11 +206,13 @@ def apply_overlays(
             if cancel_check and cancel_check():
                 raise RuntimeError("batch cancelled")
             page_rect = page.rect
-            for spec in active:
-                if spec.overlay_type is OverlayType.TEXT:
-                    _apply_text(page, page_rect, spec)
-                else:
-                    _apply_image(page, page_rect, spec, image_xrefs)
+            should_apply = page_text_rule is None or page_text_rule.matches(page.get_text("text"))
+            if should_apply:
+                for spec in active:
+                    if spec.overlay_type is OverlayType.TEXT:
+                        _apply_text(page, page_rect, spec)
+                    else:
+                        _apply_image(page, page_rect, spec, image_xrefs)
             if progress_callback:
                 progress_callback(page_number, total_pages)
         with tempfile.NamedTemporaryFile(

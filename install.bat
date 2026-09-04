@@ -14,49 +14,53 @@ echo.
 
 where py >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] ไม่พบ py launcher
-    echo กรุณาติดตั้ง Python 3.12 และเลือก Add python.exe to PATH
+    echo [ERROR] py launcher was not found.
+    echo Please install Python 3.12 and enable the py launcher.
     echo.
+    if "%MTPDFLOGO_NO_PAUSE%"=="1" exit /b 1
     pause
     exit /b 1
 )
 
 %PYTHON_CMD% --version >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] ไม่พบ Python 3.12 ผ่านคำสั่ง py -3.12
-    echo กรุณาติดตั้ง Python 3.12 ก่อนใช้งาน
+    echo [ERROR] Python 3.12 was not found with py -3.12.
+    echo Please install Python 3.12 before running this installer.
     echo.
+    if "%MTPDFLOGO_NO_PAUSE%"=="1" exit /b 1
     pause
     exit /b 1
 )
 
 if not exist "%PYTHON_EXE%" (
-    echo [1/3] กำลังสร้าง virtual environment...
+    echo [1/3] Creating virtual environment...
     %PYTHON_CMD% -m venv "%VENV_DIR%"
-    if errorlevel 1 goto install_failed
+    if errorlevel 1 goto :install_failed
 ) else (
-    echo [1/3] พบ virtual environment เดิมแล้ว
+    echo [1/3] Existing virtual environment found.
 )
 
-echo [2/3] กำลังอัปเดต pip...
+echo [2/3] Updating pip...
 "%PYTHON_EXE%" -m pip install --upgrade pip
-if errorlevel 1 goto install_failed
+if errorlevel 1 goto :install_failed
 
-echo [3/3] กำลังติดตั้ง MTPDFLogo และ dependencies...
-"%PYTHON_EXE%" -m pip install -e "%PROJECT_DIR%."
-if errorlevel 1 goto install_failed
+echo [3/3] Installing MTPDFLogo and dependencies...
+"%PYTHON_EXE%" -m pip install "%PROJECT_DIR%."
+if errorlevel 1 goto :install_failed
 
 echo.
-echo ติดตั้งเสร็จแล้ว
-echo กด start.bat เพื่อเปิดโปรแกรม
+echo Installation finished.
+echo Run start.bat to open MTPDFLogo.
 echo.
+if "%MTPDFLOGO_NO_PAUSE%"=="1" exit /b 0
 pause
 exit /b 0
 
 :install_failed
 echo.
-echo [ERROR] ติดตั้งไม่สำเร็จ
-echo กรุณาตรวจสอบ internet connection และ Python 3.12
+echo [ERROR] Installation failed.
+echo Please check your internet connection and Python 3.12 installation.
 echo.
+if "%MTPDFLOGO_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1

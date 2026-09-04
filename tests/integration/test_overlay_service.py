@@ -2,7 +2,11 @@ from pathlib import Path
 
 import fitz
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, apply_overlays
+from mtpdflogo.infrastructure.pdf.overlay_service import (
+    PageTextRule,
+    PdfOverlaySpec,
+    apply_overlays,
+)
 from PIL import Image
 
 
@@ -70,6 +74,36 @@ def test_mixed_portrait_and_landscape_pages_keep_page_geometry(tmp_path: Path) -
     result.close()
 
 
+def test_rotated_logo_cache_is_reused_without_double_rotation(tmp_path: Path) -> None:
+    source = tmp_path / "rotated-logo.pdf"
+    logo = tmp_path / "logo.png"
+    output = tmp_path / "rotated-logo-output.pdf"
+    document = fitz.open()
+    document.new_page(width=400, height=240)
+    document.new_page(width=400, height=240)
+    document.save(source)
+    document.close()
+    Image.new("RGBA", (80, 40), (255, 0, 0, 180)).save(logo)
+
+    apply_overlays(
+        source,
+        output,
+        [
+            PdfOverlaySpec(
+                overlay_type=OverlayType.IMAGE,
+                position=Position.MIDDLE_CENTER,
+                asset_path=logo,
+                width_percent=20,
+                rotation=15,
+            )
+        ],
+    )
+
+    with fitz.open(output) as result:
+        assert result.page_count == 2
+        assert [len(page.get_images(full=True)) for page in result] == [1, 1]
+
+
 def test_overlay_service_reports_real_page_progress(tmp_path: Path) -> None:
     source = tmp_path / "progress.pdf"
     output = tmp_path / "progress_marked.pdf"
@@ -88,6 +122,50 @@ def test_overlay_service_reports_real_page_progress(tmp_path: Path) -> None:
     )
 
     assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_page_text_rule_applies_overlays_only_to_matching_pages(tmp_path: Path) -> None:
+    source = tmp_path / "conditional.pdf"
+    output = tmp_path / "conditional_marked.pdf"
+    document = fitz.open()
+    first = document.new_page(width=400, height=240)
+    first.insert_text((72, 72), "total amount")
+    second = document.new_page(width=400, height=240)
+    second.insert_text((72, 72), "amount amount amount")
+    third = document.new_page(width=400, height=240)
+    third.insert_text((72, 72), "no match")
+    document.save(source)
+    document.close()
+
+    apply_overlays(
+        source,
+        output,
+        [PdfOverlaySpec(OverlayType.TEXT, Position.TOP_LEFT, text="MATCH")],
+        page_text_rule=PageTextRule("amount", min_occurrences=1, max_occurrences=2),
+    )
+
+    with fitz.open(output) as result:
+        assert [len(page.get_images(full=True)) for page in result] == [1, 0, 0]
+
+
+def test_page_text_rule_counts_keyword_anywhere_on_page() -> None:
+    rule = PageTextRule("จำนวนเงิน", min_occurrences=1, max_occurrences=3)
+
+    text = "ข้าพเจ้าขอยืนยันจํานวนเงิน\nหุ้นปกติ\nจํานวนเงิน\nบาท\nจํานวนเงิน"
+
+    assert rule.count_occurrences(text) == 3
+    assert rule.matches(text)
+
+
+def test_page_text_rule_supports_regex() -> None:
+    rule = PageTextRule(
+        r"จํานวนเงิน\s*บาท\s*\d{1,3}(?:,\d{3})*\.\d{2}",
+        use_regex=True,
+    )
+
+    assert rule.count_occurrences("จํานวนเงิน\nบาท\n7,500.00") == 1
+    assert rule.matches("จํานวนเงิน\nบาท\n7,500.00")
+    assert not rule.matches("จํานวนเงิน\nบาท\nเจ็ดพันห้าร้อย")
 
 
 def test_thai_text_exports_as_visible_pdf_overlay_without_question_marks_path(
