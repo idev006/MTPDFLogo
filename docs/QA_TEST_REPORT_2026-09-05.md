@@ -5,7 +5,7 @@ Branch: `feature/free-position-drag-drop`
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: 5D191290841AA08E3FFEB84C8CEB5217EDB239285713F0C259B08AA744652CD3
+Artifact SHA256: 4D3EE35DCE369839C74DD9CA26C10EFDF8FA0DF3675999489ED0AD71F3A0C1D9
 
 ## Executive Summary
 
@@ -24,7 +24,7 @@ installer smoke จาก zip จริง
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
 | Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 138 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 80.07% >= 75% |
+| Coverage gate | configured in `pyproject.toml` | Passed: 80.12% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
