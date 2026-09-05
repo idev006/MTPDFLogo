@@ -6,6 +6,8 @@ This document records the remediation work applied after the quality audit. It i
 
 ## Release Gates
 
+Latest QA evidence is recorded in `docs/QA_TEST_REPORT_2026-09-05.md`.
+
 Before a Windows release, run:
 
 ```powershell
