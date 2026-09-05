@@ -85,6 +85,9 @@ Regex matching normalizes the pattern and page content with Unicode NFKD. UI val
 Regex rules cache compiled patterns and normalized keywords so large documents do not repeat this setup on every page.
 User-supplied regex now has a first-line safety guard for excessive length and nested quantifier patterns that commonly cause severe backtracking.
 Search can be tested against the current preview PDF or summarized across every PDF in the queue before export.
+Page range filters such as `1-3,5,10-` are shared by search preview and export, so users can
+apply overlays to explicit pages, combine ranges with keyword/regex matching, or use ranges
+without a keyword when the task is page-based rather than content-based.
 
 ### Batch Cancellation
 
@@ -110,6 +113,8 @@ Preview now supports:
 Clicking an overlay without moving it no longer changes the item from preset positioning to absolute positioning.
 
 Batch Workspace now includes an overall progress bar and clearer Thai copy for readiness/search states.
+Queue rows expose copyable error details through the `ดู Error` action or row double-click, so
+support/debug workflows do not depend on truncated table text.
 
 ## Remaining Follow-Up
 
@@ -134,12 +139,14 @@ Implemented in the 2026-09-05 governance pass:
 - queue summary state extraction under `app/mtpdflogo/application/queue_state.py`
 - overlay settings-to-spec extraction under `app/mtpdflogo/application/overlay_mapper.py`
 - PDF page search preview utility under `app/mtpdflogo/application/page_search.py`
+- page range parser under `app/mtpdflogo/application/page_ranges.py`
 - POSIX installer launchers: `install.sh`, `start.sh`
 - PyInstaller spec resource layout contract tests
 - build zip exclusions for `.egg-info`, cache folders, and bytecode
+- Linux Qt MainWindow smoke in offscreen mode
 
 Still deferred:
 
 - add explicit Retry Failed workflow and persisted attempt metadata
 - add visual regression tests for preview/export parity
-- add full Linux GUI smoke on a real display server or xvfb profile
+- add full Linux GUI smoke on a real display server or xvfb profile beyond offscreen widget smoke

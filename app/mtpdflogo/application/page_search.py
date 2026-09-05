@@ -60,16 +60,19 @@ def search_pdf_pages(
     with fitz.open(source) as document:
         page_count = document.page_count
         for page_index, page in enumerate(document):
+            page_number = page_index + 1
+            if not rule.matches_page(page_number):
+                continue
             text = page.get_text("text")
             occurrences = rule.count_occurrences(text)
-            if occurrences <= 0:
+            if rule.keyword.strip() and occurrences <= 0:
                 continue
             matched_pages += 1
             total_occurrences += occurrences
             if max_hits is None or len(hits) < max_hits:
                 hits.append(
                     PageSearchHit(
-                        page_number=page_index + 1,
+                        page_number=page_number,
                         occurrences=occurrences,
                         excerpt=_excerpt(text, excerpt_chars),
                     )

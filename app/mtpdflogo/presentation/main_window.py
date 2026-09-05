@@ -84,6 +84,7 @@ from mtpdflogo.config import (
     font_directory,
     load_config,
     load_overlay_preset,
+    load_page_filter_options,
     load_preferences,
     save_overlay_preset,
     save_preferences,
@@ -400,6 +401,10 @@ class MainWindow(QMainWindow):
         remove.clicked.connect(self._remove_queue_rows)
         clear = QPushButton("ล้าง Queue")
         clear.clicked.connect(self._clear_queue)
+        show_error = QPushButton("ดู Error")
+        show_error.setToolTip("เปิดรายละเอียด Error ของรายการที่เลือก")
+        show_error.clicked.connect(self._show_selected_queue_error)
+        header.addWidget(show_error)
         header.addWidget(remove)
         header.addWidget(clear)
         layout.addLayout(header)
@@ -485,6 +490,10 @@ class MainWindow(QMainWindow):
         self.page_filter_keyword = QLineEdit()
         self.page_filter_keyword.setPlaceholderText("เช่น จำนวนเงิน หรือ regex")
         self.page_filter_keyword.textChanged.connect(self._page_filter_changed)
+        self.page_filter_ranges = QLineEdit()
+        self.page_filter_ranges.setPlaceholderText("ช่วงหน้า เช่น 1-3,5,10-")
+        self.page_filter_ranges.setToolTip("เว้นว่าง = ทุกหน้า; ใช้ 10- เพื่อหมายถึงตั้งแต่หน้า 10 เป็นต้นไป")
+        self.page_filter_ranges.textChanged.connect(self._page_filter_changed)
         self.page_filter_regex = QCheckBox("Regex")
         self.page_filter_regex.toggled.connect(self._page_filter_changed)
         self.page_filter_min = QSpinBox()
@@ -499,6 +508,8 @@ class MainWindow(QMainWindow):
         filter_row.addWidget(self.page_filter_enabled)
         filter_row.addWidget(self.page_filter_keyword, 1)
         filter_row.addWidget(self.page_filter_regex)
+        filter_row.addWidget(QLabel("ช่วงหน้า"))
+        filter_row.addWidget(self.page_filter_ranges, 1)
         filter_row.addWidget(QLabel("จำนวนครั้งต่อหน้า: อย่างน้อย"))
         filter_row.addWidget(self.page_filter_min)
         filter_row.addWidget(QLabel("ไม่เกิน"))
@@ -540,6 +551,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
         self.queue_table.setMinimumHeight(170)
+        self.queue_table.doubleClicked.connect(lambda _index: self._show_selected_queue_error())
         self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.queue_table)
@@ -836,6 +848,7 @@ class MainWindow(QMainWindow):
             return
         enabled = self.page_filter_enabled.isChecked()
         self.page_filter_keyword.setEnabled(enabled)
+        self.page_filter_ranges.setEnabled(enabled)
         self.page_filter_regex.setEnabled(enabled)
         self.page_filter_min.setEnabled(enabled)
         self.page_filter_max.setEnabled(enabled)
@@ -940,6 +953,7 @@ class MainWindow(QMainWindow):
             enabled=self.page_filter_enabled.isChecked(),
             keyword=self.page_filter_keyword.text(),
             use_regex=self.page_filter_regex.isChecked(),
+            page_ranges=self.page_filter_ranges.text(),
         )
 
     def _page_text_rule(self) -> PageTextRule | None:
@@ -949,6 +963,7 @@ class MainWindow(QMainWindow):
             min_occurrences=self.page_filter_min.value(),
             max_occurrences=self.page_filter_max.value(),
             use_regex=self.page_filter_regex.isChecked(),
+            page_ranges=self.page_filter_ranges.text(),
         )
 
     def _open_output_folder_preference_changed(self, checked: bool) -> None:
@@ -1440,7 +1455,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"บันทึก Default Settings แล้ว: {target}")
 
     def _save_overlay_settings_to_file(self, target: Path) -> None:
-        save_overlay_preset(target, self._overlays)
+        save_overlay_preset(target, self._overlays, self._page_filter_settings())
         self._preferences.remember_settings_file(target)
         save_preferences(self._preferences)
         self._update_recent_settings_control()
@@ -1493,6 +1508,7 @@ class MainWindow(QMainWindow):
     def _load_overlay_settings_file(self, source: Path) -> bool:
         try:
             loaded = load_overlay_preset(source)
+            page_filter = load_page_filter_options(source)
         except Exception as error:
             QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
             return False
@@ -1502,6 +1518,7 @@ class MainWindow(QMainWindow):
         self._update_recent_settings_control()
         self._overlays = loaded
         self._rebuild_overlay_list()
+        self._apply_page_filter_settings(page_filter)
         self._refresh_preview()
         self.statusBar().showMessage(
             f"โหลด Settings: {source.name} ({len(loaded)} รายการ)"
@@ -1514,6 +1531,37 @@ class MainWindow(QMainWindow):
                 "ไฟล์ Logo ต่อไปนี้ไม่มีอยู่แล้ว:\n" + "\n".join(missing_logos[:8]),
             )
         return True
+
+    def _page_filter_settings(self) -> dict[str, Any]:
+        return {
+            "enabled": self.page_filter_enabled.isChecked(),
+            "keyword": self.page_filter_keyword.text(),
+            "use_regex": self.page_filter_regex.isChecked(),
+            "min_occurrences": self.page_filter_min.value(),
+            "max_occurrences": self.page_filter_max.value(),
+            "page_ranges": self.page_filter_ranges.text(),
+        }
+
+    def _apply_page_filter_settings(self, settings: dict[str, Any]) -> None:
+        controls = [
+            self.page_filter_enabled,
+            self.page_filter_keyword,
+            self.page_filter_regex,
+            self.page_filter_min,
+            self.page_filter_max,
+            self.page_filter_ranges,
+        ]
+        for control in controls:
+            control.blockSignals(True)
+        self.page_filter_enabled.setChecked(bool(settings.get("enabled", False)))
+        self.page_filter_keyword.setText(str(settings.get("keyword", "")))
+        self.page_filter_regex.setChecked(bool(settings.get("use_regex", False)))
+        self.page_filter_min.setValue(int(settings.get("min_occurrences", 1)))
+        self.page_filter_max.setValue(int(settings.get("max_occurrences", 10)))
+        self.page_filter_ranges.setText(str(settings.get("page_ranges", "")))
+        for control in controls:
+            control.blockSignals(False)
+        self._page_filter_changed()
 
     def _settings_initial_folder(self) -> Path:
         folder = self._preferences.settings_folder
@@ -1884,7 +1932,27 @@ class MainWindow(QMainWindow):
         row = self._queue_row_for_source(source_key)
         if row is not None:
             self.queue_table.item(row, 6).setText(error)
+            self.queue_table.item(row, 6).setToolTip(error)
         self.statusBar().showMessage(f"ข้าม {Path(source_key).name}: {error}")
+
+    def _show_selected_queue_error(self) -> None:
+        row = self.queue_table.currentRow()
+        if row < 0:
+            return
+        source_item = self.queue_table.item(row, 1)
+        error_item = self.queue_table.item(row, 6)
+        error = error_item.text() if error_item else ""
+        if not error:
+            QMessageBox.information(self, "ไม่มี Error", "รายการนี้ไม่มีรายละเอียด Error")
+            return
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("รายละเอียด Error")
+        dialog.setIcon(QMessageBox.Icon.Critical)
+        source_name = source_item.text() if source_item else f"แถว {row + 1}"
+        dialog.setText(f"ไฟล์: {source_name}")
+        dialog.setInformativeText("คัดลอกข้อความด้านล่างเพื่อส่งให้ผู้พัฒนาหรือใช้ตรวจสอบต่อได้")
+        dialog.setDetailedText(error)
+        dialog.exec()
 
     def _delete_selected(self) -> None:
         row = self.overlay_list.currentRow()

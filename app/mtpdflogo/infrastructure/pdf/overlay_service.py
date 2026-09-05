@@ -13,6 +13,7 @@ from pathlib import Path
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
+from mtpdflogo.application.page_ranges import PageRange, page_in_ranges, parse_page_ranges
 from mtpdflogo.application.positioning import resolve_overlay_top_left
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
@@ -44,7 +45,14 @@ class PageTextRule:
     max_occurrences: int | None = None
     case_sensitive: bool = False
     use_regex: bool = False
+    page_ranges: str = ""
     _compiled_regex: re.Pattern[str] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _parsed_page_ranges: tuple[PageRange, ...] | None = field(
         default=None,
         init=False,
         repr=False,
@@ -61,6 +69,8 @@ class PageTextRule:
         return unicodedata.normalize("NFKD", self.keyword)
 
     def count_occurrences(self, text: str) -> int:
+        if not self.keyword.strip():
+            return 0
         if self.use_regex:
             content = unicodedata.normalize("NFKD", text)
             count = 0
@@ -100,12 +110,26 @@ class PageTextRule:
         return self._searchable_keyword
 
     def matches(self, text: str) -> bool:
+        if not self.keyword.strip():
+            return True
         count = self.count_occurrences(text)
         if count < self.min_occurrences:
             return False
         if self.max_occurrences is not None and count > self.max_occurrences:
             return False
         return True
+
+    def matches_page(self, page_number: int) -> bool:
+        return page_in_ranges(page_number, self.parsed_page_ranges())
+
+    def parsed_page_ranges(self) -> tuple[PageRange, ...]:
+        if self._parsed_page_ranges is None:
+            object.__setattr__(
+                self,
+                "_parsed_page_ranges",
+                parse_page_ranges(self.page_ranges),
+            )
+        return self._parsed_page_ranges
 
 
 def _searchable_text(value: str, case_sensitive: bool) -> str:
@@ -268,7 +292,10 @@ def apply_overlays(
             if cancel_check and cancel_check():
                 raise RuntimeError("batch cancelled")
             page_rect = page.rect
-            should_apply = page_text_rule is None or page_text_rule.matches(page.get_text("text"))
+            should_apply = page_text_rule is None or (
+                page_text_rule.matches_page(page_number)
+                and page_text_rule.matches(page.get_text("text"))
+            )
             if should_apply:
                 for spec in active:
                     if spec.overlay_type is OverlayType.TEXT:

@@ -91,6 +91,18 @@ def test_page_filter_validation_and_rule_options() -> None:
         "Regex ไม่ถูกต้อง"
     )
     assert page_filter_error(enabled=True, keyword=r"\d+", use_regex=True) is None
+    assert page_filter_error(
+        enabled=True,
+        keyword="",
+        use_regex=False,
+        page_ranges="1-3,5,10-",
+    ) is None
+    assert page_filter_error(
+        enabled=True,
+        keyword="",
+        use_regex=False,
+        page_ranges="3-1",
+    ).startswith("ช่วงหน้าไม่ถูกต้อง")
     assert page_filter_error(enabled=True, keyword="(a+)+$", use_regex=True).startswith(
         "Regex เสี่ยง"
     )
@@ -113,6 +125,17 @@ def test_page_filter_validation_and_rule_options() -> None:
     assert rule.keyword == "amount"
     assert rule.min_occurrences == 2
     assert rule.max_occurrences is None
+    ranged_rule = page_text_rule_from_options(
+        enabled=True,
+        keyword="",
+        min_occurrences=1,
+        max_occurrences=0,
+        use_regex=False,
+        page_ranges="2-4",
+    )
+    assert ranged_rule is not None
+    assert ranged_rule.keyword == ""
+    assert ranged_rule.page_ranges == "2-4"
 
 
 def test_color_to_rgb_float_falls_back_to_black() -> None:

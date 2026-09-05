@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from mtpdflogo.application.page_ranges import parse_page_ranges
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 
@@ -90,14 +91,21 @@ def page_filter_error(
     enabled: bool,
     keyword: str,
     use_regex: bool,
+    page_ranges: str = "",
 ) -> str | None:
     """Validate page text filter options the same way export will use them."""
     if not enabled:
         return None
     keyword = keyword.strip()
-    if not keyword:
-        return "ใส่คำหรือ regex ที่จะใช้กรองหน้าก่อนเริ่ม Batch"
-    if use_regex:
+    page_ranges = page_ranges.strip()
+    if not keyword and not page_ranges:
+        return "ใส่คำ/regex หรือช่วงหน้าที่จะใช้กรองก่อนเริ่ม Batch"
+    if page_ranges:
+        try:
+            parse_page_ranges(page_ranges)
+        except ValueError as error:
+            return f"ช่วงหน้าไม่ถูกต้อง: {error}"
+    if keyword and use_regex:
         safety_error = safe_regex_error(keyword)
         if safety_error:
             return safety_error
@@ -124,14 +132,17 @@ def page_text_rule_from_options(
     min_occurrences: int,
     max_occurrences: int,
     use_regex: bool,
+    page_ranges: str = "",
 ) -> PageTextRule | None:
     """Build a PageTextRule from UI-like options."""
     keyword = keyword.strip()
-    if not enabled or not keyword:
+    page_ranges = page_ranges.strip()
+    if not enabled or (not keyword and not page_ranges):
         return None
     return PageTextRule(
         keyword=keyword,
         min_occurrences=min_occurrences,
         max_occurrences=max_occurrences if max_occurrences > 0 else None,
         use_regex=use_regex,
+        page_ranges=page_ranges,
     )

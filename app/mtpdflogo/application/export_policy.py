@@ -158,6 +158,7 @@ def settings_fingerprint(
                 "max_occurrences": page_text_rule.max_occurrences,
                 "case_sensitive": page_text_rule.case_sensitive,
                 "use_regex": page_text_rule.use_regex,
+                "page_ranges": page_text_rule.page_ranges,
             }
             if page_text_rule
             else None

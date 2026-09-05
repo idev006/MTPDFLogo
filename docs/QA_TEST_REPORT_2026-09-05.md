@@ -1,11 +1,11 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-05 07:00 +07:00  
+วันที่ทดสอบ: 2026-09-05 08:30 +07:00  
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: 5DE38920255FC3EBD266A3EAD0EB6151F53362181F230DDB4E1B7CD9171570E2
+Artifact SHA256: 3FDA60A25D4CD6AA08200FA6F1B5127A81CE5A84F53B7DF80BEE1B909E9BBE6B
 
 ## Executive Summary
 
@@ -23,8 +23,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 124 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 78.37% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 137 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 79.58% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -117,6 +117,9 @@ Covered:
 - rotated logo regression
 - page-level progress callback
 - page text filtering by keyword/regex
+- page text filtering by explicit page ranges such as `1-3,5,10-`
+- page range-only filtering without keyword/regex
+- search preview and export share the same page range parser
 - cached normalized keyword/compiled regex reuse for large page searches
 - early stop when occurrences exceed configured max count
 - batch search preview summarizes matched PDF files/pages/occurrences across the queue
@@ -154,6 +157,7 @@ Covered:
 - queue summary uses Thai user-facing status names
 - disabled `เริ่ม Batch` action explains its blocker through tooltip/status tip
 - overall progress bar reports batch-level progress
+- queue error details can be opened and copied from the selected row
 - preview/properties empty states guide first-time users
 - rows can be removed/cleared
 - start button does not auto-run after selection
@@ -221,6 +225,9 @@ Evidence:
 - ผู้ใช้แจกจ่าย source zip แล้วติดตั้งด้วย `install.bat`
 - ผู้ใช้บน Linux มี source zip entrypoint ผ่าน `install.sh` และ `start.sh`
 - ผู้ใช้ทดสอบ Search/Regex กับไฟล์ preview ปัจจุบันและเห็นหน้าที่ match, จำนวนครั้ง, และเวลา
+- ผู้ใช้จำกัดการวางลายน้ำด้วยช่วงหน้า เช่น `1-3,5,10-`
+- ผู้ใช้ทดสอบ Search/Regex ทั้ง Queue โดยข้ามรูปภาพอย่างถูกต้อง
+- ผู้ใช้เปิดรายละเอียด Error ต่อไฟล์จาก Queue ได้
 
 ## Not Fully Claimed / Remaining Risks
 
@@ -232,9 +239,8 @@ Evidence:
 - disk full, permission denied แบบ OS-level ที่เกิดระหว่างเขียนไฟล์จริง
 - race condition ระดับสูงมากใน process pool เมื่อไฟล์ fail/ถูก cancel พร้อมกันจำนวนมาก
 - visual regression แบบ pixel-perfect สำหรับ preview/export parity ทุก rotation/opacity/font
-- Linux GUI smoke บน display server จริงยังไม่ถูก claim; รอบนี้ครอบคลุม Linux headless CI/import/test/launcher contract
+- Linux GUI smoke บน display server จริงยังไม่ถูก claim; รอบนี้ครอบคลุม Linux headless CI/import/test/launcher contract และ Qt MainWindow smoke แบบ offscreen
 - regex แบบ catastrophic backtracking จาก pattern ที่ผู้ใช้กำหนดยังไม่มี timeout guard เต็มรูปแบบ
-- Search preview ปัจจุบันทดสอบไฟล์ preview ปัจจุบัน ไม่ใช่ทั้ง batch queue
 
 ## World-class Follow-up Backlog
 
@@ -242,7 +248,6 @@ P1:
 
 - เพิ่ม worker-level tests สำหรับ `ExportWorker` หลายไฟล์จริง: success, one fail, cancel, resume skip
 - เพิ่ม Retry Failed workflow พร้อม attempt metadata ใน manifest
-- เพิ่ม Batch Search Preview: matched files/pages สำหรับทั้ง queue
 - เพิ่ม safe-regex policy หรือ timeout/process isolation สำหรับ regex ที่เสี่ยง catastrophic backtracking
 
 P2:

@@ -35,6 +35,7 @@
 - ในแต่ละไฟล์ประมวลผลทีละหน้าและใช้ parallel ระดับไฟล์
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI
 - ผู้ใช้ต้องกรองหน้า PDF ตามจำนวนคำหรือ regex ที่พบในหน้านั้นได้ โดยนับจาก text layer ของ PDF และ normalize ภาษาไทยก่อนเทียบ
+- ผู้ใช้ต้องกรองหน้า PDF ด้วยช่วงหน้าได้ เช่น `1-3,5,10-` โดยใช้ร่วมกับ keyword/regex หรือใช้เฉพาะช่วงหน้าอย่างเดียวได้
 - ผู้ใช้ต้องทดสอบ Search/Regex ได้ 2 ระดับ: ไฟล์ preview ปัจจุบัน และ PDF ทั้งหมดใน Queue โดยรูปภาพถูกข้ามเพราะไม่มี text layer
 - Regex จากผู้ใช้ต้องมี safe-regex guard เบื้องต้น เช่น จำกัดความยาว pattern และ block nested quantifier ที่เสี่ยงค้าง
 - ต้องรองรับ pytest และ zip installer สำหรับ Windows ที่สร้าง `.venv` ด้วย `py -3.12`
@@ -60,6 +61,7 @@
 - ปุ่มเลือกไฟล์ต้องมีปุ่มเดียว: `เลือกไฟล์`
 - Queue table เป็น control หลักของ batch และต้องแสดง input, page count, output, progress, status, error ต่อไฟล์
 - Queue table ต้องมีพื้นที่แนวตั้งมากพอสำหรับงานหลายไฟล์ โดย default ต้องสูงกว่าแถบสถานะเล็ก ๆ และผู้ใช้ต้องลาก splitter เพื่อปรับสัดส่วน preview/queue ได้
+- Queue table ต้องแสดง error ต่อรายการและมีทางให้ผู้ใช้เปิดรายละเอียด error แบบคัดลอกไปส่งต่อ/ตรวจสอบได้
 - Batch Queue ต้องมี controls สำหรับ Input Folder, recursive, depth limit, และ preserve folder structure
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
 - Batch Queue ต้องจัดเป็น Batch Workspace ที่แบ่งกลุ่ม native controls ชัดเจน: Input, Output, Options, Queue

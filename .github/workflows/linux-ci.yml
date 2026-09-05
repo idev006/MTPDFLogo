@@ -38,6 +38,12 @@ jobs:
           .venv/bin/python -m pip check
           .venv/bin/python -c "import fitz, PySide6, PIL, mtpdflogo; from mtpdflogo.config.resources import config_path, font_directory; assert config_path().exists(); assert font_directory().exists(); print('linux runtime smoke ok')"
 
+      - name: Qt MainWindow smoke
+        env:
+          PYTHONPATH: ${{ github.workspace }}/app
+        run: |
+          .venv/bin/python -c "from PySide6.QtWidgets import QApplication; from mtpdflogo.presentation.main_window import MainWindow; app = QApplication([]); window = MainWindow(); assert window.windowTitle(); window.close(); print('linux qt mainwindow smoke ok')"
+
       - name: Ruff
         run: .venv/bin/python -m ruff check app tests
 

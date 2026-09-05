@@ -148,6 +148,26 @@ def test_page_text_rule_applies_overlays_only_to_matching_pages(tmp_path: Path) 
         assert [len(page.get_images(full=True)) for page in result] == [1, 0, 0]
 
 
+def test_page_text_rule_applies_overlays_only_to_page_range(tmp_path: Path) -> None:
+    source = tmp_path / "range.pdf"
+    output = tmp_path / "range_marked.pdf"
+    document = fitz.open()
+    for _ in range(4):
+        document.new_page(width=400, height=240)
+    document.save(source)
+    document.close()
+
+    apply_overlays(
+        source,
+        output,
+        [PdfOverlaySpec(OverlayType.TEXT, Position.TOP_LEFT, text="RANGE")],
+        page_text_rule=PageTextRule("", page_ranges="2-3"),
+    )
+
+    with fitz.open(output) as result:
+        assert [len(page.get_images(full=True)) for page in result] == [0, 1, 1, 0]
+
+
 def test_page_text_rule_counts_keyword_anywhere_on_page() -> None:
     rule = PageTextRule("จำนวนเงิน", min_occurrences=1, max_occurrences=3)
 

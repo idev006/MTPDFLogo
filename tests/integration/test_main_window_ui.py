@@ -4,7 +4,7 @@ import fitz
 import pytest
 from mtpdflogo.application.export_policy import output_conflict_issues
 from mtpdflogo.application.positioning import point_to_percent
-from mtpdflogo.config.overlay_preset import save_overlay_preset
+from mtpdflogo.config.overlay_preset import load_page_filter_options, save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.presentation.main_window import DraggableTextItem, MainWindow
 from PIL import Image
@@ -171,6 +171,7 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.worker_count.value() >= 1
     assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
     assert window.page_filter_enabled.text() == "วางเฉพาะหน้าที่พบคำนี้"
+    assert window.page_filter_ranges.placeholderText() == "ช่วงหน้า เช่น 1-3,5,10-"
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
@@ -288,6 +289,12 @@ def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
     window._preferences.output_folder = output_folder
     window._preferences.settings_folder = remembered
     window._append_overlay(OverlayType.TEXT)
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_keyword.setText("จำนวนเงิน")
+    window.page_filter_regex.setChecked(False)
+    window.page_filter_min.setValue(2)
+    window.page_filter_max.setValue(0)
+    window.page_filter_ranges.setText("1-3,5")
 
     def fake_save_dialog(*args) -> tuple[str, str]:
         captured["initial"] = args[2]
@@ -304,6 +311,14 @@ def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
     assert target.exists()
     assert window.recent_settings.itemText(1) == target.name
     assert window.recent_settings.itemData(1) == str(target.resolve())
+    assert load_page_filter_options(target) == {
+        "enabled": True,
+        "keyword": "จำนวนเงิน",
+        "use_regex": False,
+        "min_occurrences": 2,
+        "max_occurrences": 0,
+        "page_ranges": "1-3,5",
+    }
 
 
 def test_load_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypatch) -> None:
@@ -336,6 +351,14 @@ def test_load_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
                 "color": "#000000",
             }
         ],
+        {
+            "enabled": True,
+            "keyword": "amount",
+            "use_regex": True,
+            "min_occurrences": 1,
+            "max_occurrences": 4,
+            "page_ranges": "2-",
+        },
     )
     captured: dict[str, str] = {}
     window = MainWindow()
@@ -357,6 +380,12 @@ def test_load_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
     assert window._preferences.pdf_folder == pdf_folder
     assert window._preferences.output_folder == output_folder
     assert window._overlays[0]["text"] == "loaded"
+    assert window.page_filter_enabled.isChecked()
+    assert window.page_filter_keyword.text() == "amount"
+    assert window.page_filter_regex.isChecked()
+    assert window.page_filter_min.value() == 1
+    assert window.page_filter_max.value() == 4
+    assert window.page_filter_ranges.text() == "2-"
     assert window.statusBar().currentMessage() == "โหลด Settings: loaded.toml (1 รายการ)"
 
 
@@ -676,7 +705,7 @@ def test_page_filter_requires_keyword_before_export(qtbot, tmp_path, monkeypatch
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
 
     assert not window._start_export([(source, destination)])
-    assert "ใส่คำหรือ regex" in warnings[0]
+    assert "ใส่คำ/regex หรือช่วงหน้า" in warnings[0]
 
 
 def test_page_filter_builds_text_rule(qtbot) -> None:
@@ -690,6 +719,7 @@ def test_page_filter_builds_text_rule(qtbot) -> None:
     window.page_filter_regex.setChecked(True)
     window.page_filter_min.setValue(1)
     window.page_filter_max.setValue(10)
+    window.page_filter_ranges.setText("2-5")
 
     rule = window._page_text_rule()
 
@@ -698,6 +728,7 @@ def test_page_filter_builds_text_rule(qtbot) -> None:
     assert rule.min_occurrences == 1
     assert rule.max_occurrences == 10
     assert rule.use_regex
+    assert rule.page_ranges == "2-5"
 
 
 def test_page_filter_rejects_invalid_regex(qtbot) -> None:
@@ -722,6 +753,20 @@ def test_page_filter_rejects_high_risk_regex(qtbot) -> None:
 
     assert window._page_filter_error() is not None
     assert "Regex เสี่ยง" in window.pipeline_summary.text()
+
+
+def test_page_filter_allows_page_ranges_without_keyword(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_ranges.setText("2-")
+
+    assert window._page_filter_error() is None
+    rule = window._page_text_rule()
+    assert rule is not None
+    assert rule.keyword == ""
+    assert rule.page_ranges == "2-"
 
 
 def test_page_filter_test_button_reports_matching_pages(qtbot, tmp_path) -> None:
@@ -785,6 +830,60 @@ def test_page_filter_queue_button_reports_batch_search_summary(qtbot, tmp_path) 
     assert "2/4 หน้า" in summary
     assert "รวม 3 ครั้ง" in summary
     assert "ข้ามรูปภาพ/ไฟล์ที่ไม่ใช่ PDF 1 ไฟล์" in summary
+
+
+def test_page_filter_queue_button_supports_page_ranges_without_keyword(qtbot, tmp_path) -> None:
+    source = tmp_path / "pages.pdf"
+    document = fitz.open()
+    for text in ["cover", "body", "appendix"]:
+        page = document.new_page(width=300, height=180)
+        page.insert_text((36, 72), text)
+    document.save(source)
+    document.close()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._populate_queue([(source, tmp_path / "out" / "pages-watermask.pdf")])
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_ranges.setText("2-")
+
+    window._test_page_filter_on_queue()
+
+    assert "ทั้ง Queue พบ 1/1 PDF" in window.page_filter_result.text()
+    assert "2/3 หน้า" in window.page_filter_result.text()
+
+
+def test_selected_queue_error_dialog_uses_copyable_details(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "bad.pdf"
+    destination = tmp_path / "out" / "bad-watermask.pdf"
+    source.touch()
+    captured: dict[str, str] = {}
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._populate_queue([(source, destination)])
+    window.queue_table.setCurrentCell(0, 1)
+    window._show_file_error(str(source), "permission denied")
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "exec",
+        lambda self: captured.update(
+            {
+                "title": self.windowTitle(),
+                "text": self.text(),
+                "details": self.detailedText(),
+            }
+        ),
+    )
+
+    window._show_selected_queue_error()
+
+    assert captured["title"] == "รายละเอียด Error"
+    assert "bad.pdf" in captured["text"]
+    assert captured["details"] == "permission denied"
 
 
 def test_batch_controls_are_ready_after_export_finished_without_clearing(

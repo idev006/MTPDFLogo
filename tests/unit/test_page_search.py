@@ -109,3 +109,25 @@ def test_search_pdf_batch_summarizes_many_files_and_skips_images(tmp_path: Path)
     assert result.matched_pages == 2
     assert result.total_occurrences == 2
     assert [document.source for document in result.documents] == [first, second]
+
+
+def test_search_pdf_pages_respects_page_ranges_with_keyword(tmp_path: Path) -> None:
+    source = tmp_path / "ranged-search.pdf"
+    _make_search_pdf(source, ["amount", "amount", "amount"])
+
+    result = search_pdf_pages(source, PageTextRule("amount", page_ranges="2-3"))
+
+    assert result.page_count == 3
+    assert result.matched_pages == 2
+    assert [hit.page_number for hit in result.hits] == [2, 3]
+
+
+def test_search_pdf_pages_supports_page_ranges_without_keyword(tmp_path: Path) -> None:
+    source = tmp_path / "page-only-search.pdf"
+    _make_search_pdf(source, ["cover", "body", "appendix"])
+
+    result = search_pdf_pages(source, PageTextRule("", page_ranges="2-"))
+
+    assert result.page_count == 3
+    assert result.matched_pages == 2
+    assert [hit.page_number for hit in result.hits] == [2, 3]

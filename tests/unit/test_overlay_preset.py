@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from mtpdflogo.config.overlay_preset import load_overlay_preset, save_overlay_preset
+from mtpdflogo.config.overlay_preset import (
+    load_overlay_preset,
+    load_page_filter_options,
+    save_overlay_preset,
+)
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
 
@@ -41,6 +45,39 @@ def test_overlay_preset_round_trip_as_toml(tmp_path: Path) -> None:
         },
     ]
 
-    save_overlay_preset(path, overlays)
+    save_overlay_preset(
+        path,
+        overlays,
+        {
+            "enabled": True,
+            "keyword": "จำนวนเงิน",
+            "use_regex": False,
+            "min_occurrences": 2,
+            "max_occurrences": 9,
+            "page_ranges": "1-3,5",
+        },
+    )
 
     assert load_overlay_preset(path) == overlays
+    assert load_page_filter_options(path) == {
+        "enabled": True,
+        "keyword": "จำนวนเงิน",
+        "use_regex": False,
+        "min_occurrences": 2,
+        "max_occurrences": 9,
+        "page_ranges": "1-3,5",
+    }
+
+
+def test_overlay_preset_defaults_page_filter_for_older_files(tmp_path: Path) -> None:
+    path = tmp_path / "old-settings.toml"
+    save_overlay_preset(path, [])
+
+    assert load_page_filter_options(path) == {
+        "enabled": False,
+        "keyword": "",
+        "use_regex": False,
+        "min_occurrences": 1,
+        "max_occurrences": 10,
+        "page_ranges": "",
+    }

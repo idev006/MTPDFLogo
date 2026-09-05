@@ -46,6 +46,13 @@ def test_settings_fingerprint_includes_page_text_rule() -> None:
         specs,
         PageTextRule(keyword="total", min_occurrences=1),
     )
+    assert settings_fingerprint(
+        specs,
+        PageTextRule(keyword="total", min_occurrences=1, page_ranges="1-2"),
+    ) != settings_fingerprint(
+        specs,
+        PageTextRule(keyword="total", min_occurrences=1, page_ranges="3-"),
+    )
 
 
 def test_file_fingerprint_tracks_size_and_mtime(tmp_path: Path) -> None:

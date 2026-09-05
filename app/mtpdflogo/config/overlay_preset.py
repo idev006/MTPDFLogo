@@ -17,7 +17,11 @@ def _quote(value: object) -> str:
     return json.dumps("" if value is None else str(value), ensure_ascii=False)
 
 
-def save_overlay_preset(path: Path, overlays: list[dict[str, Any]]) -> None:
+def save_overlay_preset(
+    path: Path,
+    overlays: list[dict[str, Any]],
+    page_filter: dict[str, Any] | None = None,
+) -> None:
     """Persist the current text/logo overlay settings as TOML."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -25,6 +29,19 @@ def save_overlay_preset(path: Path, overlays: list[dict[str, Any]]) -> None:
         'application = "MTPDFLogo"',
         "",
     ]
+    if page_filter is not None:
+        lines.extend(
+            [
+                "[page_filter]",
+                f"enabled = {_bool_value(page_filter.get('enabled', False))}",
+                f"keyword = {_quote(page_filter.get('keyword', ''))}",
+                f"use_regex = {_bool_value(page_filter.get('use_regex', False))}",
+                f"min_occurrences = {int(page_filter.get('min_occurrences', 1))}",
+                f"max_occurrences = {int(page_filter.get('max_occurrences', 10))}",
+                f"page_ranges = {_quote(page_filter.get('page_ranges', ''))}",
+                "",
+            ]
+        )
     for index, item in enumerate(overlays, 1):
         lines.extend(
             [
@@ -57,11 +74,7 @@ def save_overlay_preset(path: Path, overlays: list[dict[str, Any]]) -> None:
 
 def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
     """Load text/logo overlay settings from a TOML preset file."""
-    with path.open("rb") as preset_file:
-        data = tomllib.load(preset_file)
-    schema_version = int(data.get("schema_version", 0))
-    if schema_version not in {1, PRESET_SCHEMA_VERSION}:
-        raise ValueError("unsupported overlay preset schema version")
+    data = _load_preset_data(path)
     overlays: list[dict[str, Any]] = []
     for index, raw_item in enumerate(data.get("overlays", []), 1):
         overlay_type = OverlayType(str(raw_item.get("type", OverlayType.TEXT.value)))
@@ -92,6 +105,35 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
             }
         )
     return overlays
+
+
+def load_page_filter_options(path: Path) -> dict[str, Any]:
+    """Load optional page filter settings from a TOML preset file."""
+    data = _load_preset_data(path)
+    raw_filter = data.get("page_filter", {})
+    if not isinstance(raw_filter, dict):
+        raw_filter = {}
+    return {
+        "enabled": bool(raw_filter.get("enabled", False)),
+        "keyword": str(raw_filter.get("keyword", "")),
+        "use_regex": bool(raw_filter.get("use_regex", False)),
+        "min_occurrences": _bounded_int(raw_filter.get("min_occurrences", 1), 1, 999),
+        "max_occurrences": _bounded_int(raw_filter.get("max_occurrences", 10), 0, 999),
+        "page_ranges": str(raw_filter.get("page_ranges", "")),
+    }
+
+
+def _load_preset_data(path: Path) -> dict[str, Any]:
+    with path.open("rb") as preset_file:
+        data = tomllib.load(preset_file)
+    schema_version = int(data.get("schema_version", 0))
+    if schema_version not in {1, PRESET_SCHEMA_VERSION}:
+        raise ValueError("unsupported overlay preset schema version")
+    return data
+
+
+def _bool_value(value: object) -> str:
+    return "true" if bool(value) else "false"
 
 
 def _enum_value(value: object, default: OverlayType | Position | PositionMode) -> str:
