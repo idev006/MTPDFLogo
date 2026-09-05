@@ -691,22 +691,21 @@ class MainWindow(QMainWindow):
         )
         self.page_filter_ranges.textChanged.connect(self._page_filter_changed)
         self.page_filter_min = QSpinBox()
-        self.page_filter_min.setRange(1, 999)
-        self.page_filter_min.setValue(1)
+        self.page_filter_min.setRange(0, 100)
+        self.page_filter_min.setValue(0)
         self.page_filter_min.valueChanged.connect(self._page_filter_min_changed)
         self.page_filter_max = QSpinBox()
-        self.page_filter_max.setRange(0, 999)
-        self.page_filter_max.setValue(10)
-        self.page_filter_max.setSpecialValueText("ไม่จำกัด")
+        self.page_filter_max.setRange(0, 100)
+        self.page_filter_max.setValue(100)
         self.page_filter_max.valueChanged.connect(self._page_filter_max_changed)
         self.page_filter_range_slider = RangeSlider(
-            1,
-            999,
+            0,
+            100,
             self.page_filter_min.value(),
             self.page_filter_max.value(),
         )
         self.page_filter_range_slider.setToolTip(
-            "ลากสองด้านเพื่อกำหนดช่วงจำนวนครั้งต่อหน้า; ใช้ช่อง 'ไม่เกิน' = 0 เมื่อต้องการไม่จำกัด"
+            "ลากสองด้านเพื่อกำหนดช่วงจำนวนครั้งต่อหน้า ตั้งแต่ 0 ถึง 100"
         )
         self.page_filter_range_slider.rangeChanged.connect(
             self._page_filter_range_slider_changed
@@ -1090,10 +1089,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_syncing_occurrence_controls", False):
             return
         self._syncing_occurrence_controls = True
-        if self.page_filter_max.value() != 0 and value > self.page_filter_max.value():
+        if value > self.page_filter_max.value():
             self.page_filter_max.setValue(value)
-        upper = self.page_filter_max.value() or self.page_filter_range_slider.upperValue()
-        self.page_filter_range_slider.setValues(value, upper)
+        self.page_filter_range_slider.setValues(value, self.page_filter_max.value())
         self._syncing_occurrence_controls = False
         self._page_filter_changed()
 
@@ -1101,10 +1099,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_syncing_occurrence_controls", False):
             return
         self._syncing_occurrence_controls = True
-        if value != 0 and value < self.page_filter_min.value():
+        if value < self.page_filter_min.value():
             self.page_filter_min.setValue(value)
-        upper = value or self.page_filter_range_slider.upperValue()
-        self.page_filter_range_slider.setValues(self.page_filter_min.value(), upper)
+        self.page_filter_range_slider.setValues(self.page_filter_min.value(), value)
         self._syncing_occurrence_controls = False
         self._page_filter_changed()
 
@@ -1832,11 +1829,11 @@ class MainWindow(QMainWindow):
         self.page_filter_enabled.setChecked(bool(settings.get("enabled", False)))
         self.page_filter_keyword.setText(str(settings.get("keyword", "")))
         self.page_filter_regex.setChecked(bool(settings.get("use_regex", False)))
-        self.page_filter_min.setValue(int(settings.get("min_occurrences", 1)))
-        self.page_filter_max.setValue(int(settings.get("max_occurrences", 10)))
+        self.page_filter_min.setValue(int(settings.get("min_occurrences", 0)))
+        self.page_filter_max.setValue(int(settings.get("max_occurrences", 100)))
         self.page_filter_range_slider.setValues(
             self.page_filter_min.value(),
-            self.page_filter_max.value() or self.page_filter_range_slider.upperValue(),
+            self.page_filter_max.value(),
         )
         self.page_filter_ranges.setText(str(settings.get("page_ranges", "")))
         for control in controls:

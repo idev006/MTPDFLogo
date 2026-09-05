@@ -182,6 +182,10 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
     assert window.page_filter_enabled.text() == "วางเฉพาะหน้าที่พบคำนี้"
     assert window.page_filter_ranges.placeholderText() == "ช่วงหน้า เช่น 1-3,5,10-"
+    assert window.page_filter_min.minimum() == 0
+    assert window.page_filter_min.maximum() == 100
+    assert window.page_filter_max.minimum() == 0
+    assert window.page_filter_max.maximum() == 100
     assert window.max_depth_slider.value() == window.max_depth.value()
     assert window.worker_count_slider.value() == window.worker_count.value()
     assert window.page_filter_range_slider.lowerValue() == window.page_filter_min.value()
@@ -232,6 +236,14 @@ def test_occurrence_range_controls_keep_min_less_than_or_equal_max(qtbot) -> Non
     assert window.page_filter_min.value() == 40
     assert window.page_filter_range_slider.lowerValue() == 40
     assert window.page_filter_range_slider.upperValue() == 40
+
+    window.page_filter_max.setValue(100)
+    window.page_filter_min.setValue(250)
+
+    assert window.page_filter_min.value() == 100
+    assert window.page_filter_max.value() == 100
+    assert window.page_filter_range_slider.lowerValue() == 100
+    assert window.page_filter_range_slider.upperValue() == 100
 
 
 def test_empty_state_guides_first_time_user(qtbot) -> None:
@@ -350,7 +362,7 @@ def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
     window.page_filter_keyword.setText("จำนวนเงิน")
     window.page_filter_regex.setChecked(False)
     window.page_filter_min.setValue(2)
-    window.page_filter_max.setValue(0)
+    window.page_filter_max.setValue(100)
     window.page_filter_ranges.setText("1-3,5")
 
     def fake_save_dialog(*args) -> tuple[str, str]:
@@ -373,7 +385,7 @@ def test_save_settings_remembers_last_settings_folder(qtbot, tmp_path, monkeypat
         "keyword": "จำนวนเงิน",
         "use_regex": False,
         "min_occurrences": 2,
-        "max_occurrences": 0,
+        "max_occurrences": 100,
         "page_ranges": "1-3,5",
     }
 

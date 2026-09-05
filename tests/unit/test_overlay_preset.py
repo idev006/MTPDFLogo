@@ -77,7 +77,38 @@ def test_overlay_preset_defaults_page_filter_for_older_files(tmp_path: Path) -> 
         "enabled": False,
         "keyword": "",
         "use_regex": False,
-        "min_occurrences": 1,
-        "max_occurrences": 10,
+        "min_occurrences": 0,
+        "max_occurrences": 100,
+        "page_ranges": "",
+    }
+
+
+def test_overlay_preset_clamps_page_filter_occurrences_to_ui_range(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wide-range-settings.toml"
+    path.write_text(
+        "\n".join(
+            [
+                "schema_version = 2",
+                "",
+                "[page_filter]",
+                "enabled = true",
+                'keyword = "amount"',
+                "use_regex = false",
+                "min_occurrences = 250",
+                "max_occurrences = 999",
+                'page_ranges = ""',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_page_filter_options(path) == {
+        "enabled": True,
+        "keyword": "amount",
+        "use_regex": False,
+        "min_occurrences": 100,
+        "max_occurrences": 100,
         "page_ranges": "",
     }

@@ -66,7 +66,7 @@
 - Batch Queue ต้องมี controls สำหรับ Input Folder, recursive, depth limit, และ preserve folder structure
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
 - Numeric controls ใน Batch Workspace เช่น depth และ workers ต้องมี slider สำหรับปรับเร็ว และยังคง spinbox สำหรับค่าที่ต้องการความแม่นยำ
-- Search occurrence thresholds ต้องใช้ range slider เดียวสำหรับกำหนดช่วงอย่างน้อย/ไม่เกิน เพื่อป้องกัน min มากกว่า max และยังคง spinbox คู่ไว้สำหรับกรอกเลขตรง ๆ
+- Search occurrence thresholds ต้องใช้ range slider เดียวสำหรับกำหนดช่วงอย่างน้อย/ไม่เกินในช่วง 0-100 เพื่อป้องกัน min มากกว่า max และยังคง spinbox คู่ไว้สำหรับกรอกเลขตรง ๆ
 - Batch Queue ต้องจัดเป็น Batch Workspace แบบ 2 panel ซ้าย-ขวา: ฝั่งซ้ายเป็น Settings Tabs และฝั่งขวาเป็น Queue Monitor
 - Settings Tabs ฝั่งซ้ายต้องแบ่งตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing
 - Queue Monitor ฝั่งขวาต้องแสดง queue actions, summary, overall progress และ queue table โดยไม่ถูก settings controls บีบพื้นที่

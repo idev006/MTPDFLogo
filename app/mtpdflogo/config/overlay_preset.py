@@ -36,8 +36,8 @@ def save_overlay_preset(
                 f"enabled = {_bool_value(page_filter.get('enabled', False))}",
                 f"keyword = {_quote(page_filter.get('keyword', ''))}",
                 f"use_regex = {_bool_value(page_filter.get('use_regex', False))}",
-                f"min_occurrences = {int(page_filter.get('min_occurrences', 1))}",
-                f"max_occurrences = {int(page_filter.get('max_occurrences', 10))}",
+                f"min_occurrences = {int(page_filter.get('min_occurrences', 0))}",
+                f"max_occurrences = {int(page_filter.get('max_occurrences', 100))}",
                 f"page_ranges = {_quote(page_filter.get('page_ranges', ''))}",
                 "",
             ]
@@ -117,8 +117,8 @@ def load_page_filter_options(path: Path) -> dict[str, Any]:
         "enabled": bool(raw_filter.get("enabled", False)),
         "keyword": str(raw_filter.get("keyword", "")),
         "use_regex": bool(raw_filter.get("use_regex", False)),
-        "min_occurrences": _bounded_int(raw_filter.get("min_occurrences", 1), 1, 999),
-        "max_occurrences": _bounded_int(raw_filter.get("max_occurrences", 10), 0, 999),
+        "min_occurrences": _bounded_int(raw_filter.get("min_occurrences", 0), 0, 100),
+        "max_occurrences": _bounded_int(raw_filter.get("max_occurrences", 100), 0, 100),
         "page_ranges": str(raw_filter.get("page_ranges", "")),
     }
 
