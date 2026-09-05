@@ -5,7 +5,7 @@ Branch: `feature/free-position-drag-drop`
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: E3BD473DA42FBDE317AAE220553D7F1B503CC4D81E883C3F1264A941F47E0B9E
+Artifact SHA256: 5DE38920255FC3EBD266A3EAD0EB6151F53362181F230DDB4E1B7CD9171570E2
 
 ## Executive Summary
 
@@ -23,8 +23,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 117 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 78.29% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 124 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 78.37% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -119,6 +119,7 @@ Covered:
 - page text filtering by keyword/regex
 - cached normalized keyword/compiled regex reuse for large page searches
 - early stop when occurrences exceed configured max count
+- batch search preview summarizes matched PDF files/pages/occurrences across the queue
 
 Evidence:
 
@@ -152,6 +153,8 @@ Covered:
 - queue table shows rows for selected files
 - queue summary uses Thai user-facing status names
 - disabled `เริ่ม Batch` action explains its blocker through tooltip/status tip
+- overall progress bar reports batch-level progress
+- preview/properties empty states guide first-time users
 - rows can be removed/cleared
 - start button does not auto-run after selection
 - start/cancel button state during and after batch

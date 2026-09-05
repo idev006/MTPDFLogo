@@ -21,6 +21,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -75,7 +77,7 @@ from mtpdflogo.application.overlay_mapper import (
     page_filter_error,
     page_text_rule_from_options,
 )
-from mtpdflogo.application.page_search import search_pdf_pages
+from mtpdflogo.application.page_search import search_pdf_batch, search_pdf_pages
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
 from mtpdflogo.application.queue_state import blocked_start_message, queue_summary_text
 from mtpdflogo.config import (
@@ -508,6 +510,12 @@ class MainWindow(QMainWindow):
         )
         self.test_page_filter_button.clicked.connect(self._test_page_filter_on_current_file)
         filter_row.addWidget(self.test_page_filter_button)
+        self.test_queue_filter_button = QPushButton("ทดสอบทั้ง Queue")
+        self.test_queue_filter_button.setToolTip(
+            "ค้นหาใน PDF ทุกไฟล์ใน queue ก่อน export จริง; รูปภาพจะถูกข้าม"
+        )
+        self.test_queue_filter_button.clicked.connect(self._test_page_filter_on_queue)
+        filter_row.addWidget(self.test_queue_filter_button)
         options_layout.addLayout(filter_row)
         self.page_filter_result = QLabel("Search ยังไม่ได้ทดสอบ")
         self.page_filter_result.setWordWrap(True)
@@ -517,6 +525,12 @@ class MainWindow(QMainWindow):
         layout.addLayout(setup_row)
         self.queue_summary = QLabel("ยังไม่มีไฟล์ใน queue")
         layout.addWidget(self.queue_summary)
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setRange(0, 100)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("พร้อมเริ่มเมื่อข้อมูลครบ")
+        self.batch_progress.setToolTip("Progress รวมของ Batch")
+        layout.addWidget(self.batch_progress)
         self.queue_table = QTableWidget(0, 7)
         self.queue_table.setHorizontalHeaderLabels(
             ["#", "Input File", "Pages/Items", "Output File", "Progress", "Status", "Error"]
@@ -541,6 +555,7 @@ class MainWindow(QMainWindow):
         delete.clicked.connect(self._delete_selected)
         layout.addWidget(delete)
         self.overlay_list = QListWidget()
+        self.overlay_list.setToolTip("ยังไม่มี overlay — กด + Text หรือ + Logo เพื่อเริ่ม")
         self.overlay_list.currentRowChanged.connect(self._select_overlay)
         layout.addWidget(self.overlay_list, 1)
         buttons = QHBoxLayout()
@@ -607,7 +622,7 @@ class MainWindow(QMainWindow):
         title = QLabel("PROPERTIES — รายการที่เลือก")
         title.setObjectName("sectionTitle")
         outer_layout.addWidget(title)
-        self.selected_item_label = QLabel("ยังไม่ได้เลือกรายการ")
+        self.selected_item_label = QLabel("ยังไม่มีรายการที่เลือก — กด + Text หรือ + Logo")
         outer_layout.addWidget(self.selected_item_label)
         self.type_value = QLabel("—")
         self.text_input = QLineEdit()
@@ -754,6 +769,7 @@ class MainWindow(QMainWindow):
                 self.queue_table.setItem(row, column, item)
             self.queue_table.item(row, 1).setData(Qt.ItemDataRole.UserRole, str(source))
         self._update_queue_summary()
+        self._reset_batch_progress()
         self._update_pipeline()
 
     def _batch_output_text_changed(self) -> None:
@@ -824,6 +840,7 @@ class MainWindow(QMainWindow):
         self.page_filter_min.setEnabled(enabled)
         self.page_filter_max.setEnabled(enabled)
         self.test_page_filter_button.setEnabled(enabled)
+        self.test_queue_filter_button.setEnabled(enabled)
         if not enabled:
             self.page_filter_result.setText("Search ปิดอยู่ — จะวาง overlay ทุกหน้า")
         error = self._page_filter_error()
@@ -869,6 +886,53 @@ class MainWindow(QMainWindow):
             self.page_filter_result.setText(
                 f"ไม่พบหน้าที่ตรงเงื่อนไขใน {result.page_count} หน้า "
                 f"({result.elapsed_seconds:.2f}s)"
+            )
+
+    def _test_page_filter_on_queue(self) -> None:
+        if not self.page_filter_enabled.isChecked():
+            self.page_filter_result.setText("Search ปิดอยู่ — จะวาง overlay ทุกหน้า")
+            return
+        error = self._page_filter_error()
+        if error:
+            self.page_filter_result.setText(error)
+            self._update_pipeline(error)
+            return
+        sources = self._queue_sources()
+        if not sources:
+            self.page_filter_result.setText("เพิ่ม PDF เข้า Queue ก่อนทดสอบทั้ง Queue")
+            return
+        rule = self._page_text_rule()
+        if rule is None:
+            self.page_filter_result.setText("ใส่คำหรือ regex ก่อนทดสอบ Search")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = search_pdf_batch(sources, rule, max_hits_per_file=3)
+        except Exception as error:
+            self.page_filter_result.setText(f"Search ทั้ง Queue ล้มเหลว: {error}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        skipped = (
+            f" | ข้ามรูปภาพ/ไฟล์ที่ไม่ใช่ PDF {result.skipped_non_pdf} ไฟล์"
+            if result.skipped_non_pdf
+            else ""
+        )
+        if result.pdf_count == 0:
+            self.page_filter_result.setText("Queue นี้ไม่มี PDF ให้ค้นหา")
+            return
+        if result.matched_pages:
+            self.page_filter_result.setText(
+                f"ทั้ง Queue พบ {result.matched_files}/{result.pdf_count} PDF, "
+                f"{result.matched_pages}/{result.page_count} หน้า, "
+                f"รวม {result.total_occurrences} ครั้ง "
+                f"({result.elapsed_seconds:.2f}s){skipped}"
+            )
+        else:
+            self.page_filter_result.setText(
+                f"ทั้ง Queue ไม่พบหน้าที่ตรงเงื่อนไขใน {result.pdf_count} PDF "
+                f"รวม {result.page_count} หน้า ({result.elapsed_seconds:.2f}s){skipped}"
             )
 
     def _page_filter_error(self) -> str | None:
@@ -1101,6 +1165,18 @@ class MainWindow(QMainWindow):
         if percent < 100:
             self.queue_table.item(row, 5).setText("Processing")
         self._update_queue_summary()
+
+    def _reset_batch_progress(self) -> None:
+        if not hasattr(self, "batch_progress"):
+            return
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("พร้อมเริ่มเมื่อข้อมูลครบ")
+
+    def _update_batch_progress(self, percent: int, name: str) -> None:
+        bounded = max(0, min(100, percent))
+        self.batch_progress.setValue(bounded)
+        self.batch_progress.setFormat(f"{bounded}% — {name}")
+        self.statusBar().showMessage(f"กำลังประมวลผล {bounded}% — {name}")
 
     def _mark_active_rows_stopping(self) -> None:
         for row in range(self.queue_table.rowCount()):
@@ -1511,7 +1587,7 @@ class MainWindow(QMainWindow):
         item = self._selected_model()
         self._updating_properties = True
         if item is None:
-            self.selected_item_label.setText("ยังไม่ได้เลือกรายการ")
+            self.selected_item_label.setText("ยังไม่มีรายการที่เลือก — กด + Text หรือ + Logo")
             self.type_value.setText("—")
             self.text_input.clear()
             self.logo_value.setText("ยังไม่ได้เลือกไฟล์")
@@ -1542,7 +1618,6 @@ class MainWindow(QMainWindow):
             self.opacity_label.setText(f"{item['opacity']}%")
             self.rotation.setValue(item["rotation"])
             self._set_color_button(item["color"])
-            self.properties_tabs.setCurrentIndex(0)
         self._sync_property_controls(item)
         self._updating_properties = False
         self._refresh_preview()
@@ -1739,9 +1814,9 @@ class MainWindow(QMainWindow):
         self._update_pipeline("กำลังประมวลผล")
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda percent, name: self.statusBar().showMessage(
-            f"กำลังประมวลผล {percent}% — {name}"
-        ))
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("0% — เริ่มประมวลผล")
+        self._worker.progress.connect(self._update_batch_progress)
         self._worker.file_failed.connect(
             lambda name, error: self._show_file_error(name, error)
         )
@@ -1768,6 +1843,8 @@ class MainWindow(QMainWindow):
                 f"เสร็จสิ้น — Settings ยังแก้ต่อได้: {self._last_export_jobs[0][1]}"
             )
         if self._is_successful_finish_message(message):
+            self.batch_progress.setValue(100)
+            self.batch_progress.setFormat("100% — เสร็จสิ้น")
             self._open_finished_output_folder()
         self._update_pipeline("เสร็จสิ้น — ตรวจ Output ได้แล้ว")
         QMessageBox.information(self, "เสร็จสิ้น", message)
@@ -1786,6 +1863,7 @@ class MainWindow(QMainWindow):
     def _export_failed(self, message: str) -> None:
         self.cancel_action.setEnabled(False)
         self._refresh_batch_readiness()
+        self.batch_progress.setFormat("Export ไม่สำเร็จ")
         self.statusBar().showMessage("Export ไม่สำเร็จ")
         self._update_pipeline("Export ไม่สำเร็จ")
         QMessageBox.critical(self, "Export ไม่สำเร็จ", message)
@@ -1857,6 +1935,7 @@ class MainWindow(QMainWindow):
             return
         if self._document is None or self._document.page_count == 0:
             self._update_page_controls()
+            self._show_empty_preview_state()
             return
         self._update_page_controls()
         page = self._document[self._preview_page_index]
@@ -1875,6 +1954,21 @@ class MainWindow(QMainWindow):
             return
         self._draw_preview_overlays(pixmap.width, pixmap.height)
         self._scene.setSceneRect(0, 0, pixmap.width, pixmap.height)
+        self._apply_preview_zoom()
+
+    def _show_empty_preview_state(self) -> None:
+        self._scene.setSceneRect(0, 0, 640, 420)
+        message = self._scene.addText(
+            "เลือก PDF/รูปภาพ เพื่อเริ่ม\n"
+            "จากนั้นเพิ่ม Text หรือ Logo แล้วลากบน preview เพื่อวางอิสระ"
+        )
+        message.setDefaultTextColor(QColor("#f3f4f6"))
+        message.setTextWidth(460)
+        font = QFont()
+        font.setPointSize(14)
+        message.setFont(font)
+        rect = message.boundingRect()
+        message.setPos((640 - rect.width()) / 2, (420 - rect.height()) / 2)
         self._apply_preview_zoom()
 
     def _draw_preview_overlays(self, preview_width: int, preview_height: int) -> None:

@@ -35,6 +35,8 @@
 - ในแต่ละไฟล์ประมวลผลทีละหน้าและใช้ parallel ระดับไฟล์
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI
 - ผู้ใช้ต้องกรองหน้า PDF ตามจำนวนคำหรือ regex ที่พบในหน้านั้นได้ โดยนับจาก text layer ของ PDF และ normalize ภาษาไทยก่อนเทียบ
+- ผู้ใช้ต้องทดสอบ Search/Regex ได้ 2 ระดับ: ไฟล์ preview ปัจจุบัน และ PDF ทั้งหมดใน Queue โดยรูปภาพถูกข้ามเพราะไม่มี text layer
+- Regex จากผู้ใช้ต้องมี safe-regex guard เบื้องต้น เช่น จำกัดความยาว pattern และ block nested quantifier ที่เสี่ยงค้าง
 - ต้องรองรับ pytest และ zip installer สำหรับ Windows ที่สร้าง `.venv` ด้วย `py -3.12`
 - Linux ต้องมี `install.sh` และ `start.sh` สำหรับ source zip โดยใช้ Python 3.12 และ `.venv/bin/python`
 - ต้องมี Windows CI บน GitHub Actions สำหรับ lint, pytest coverage gate, runtime import smoke, build zip และ installer smoke
@@ -62,7 +64,9 @@
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
 - Batch Queue ต้องจัดเป็น Batch Workspace ที่แบ่งกลุ่ม native controls ชัดเจน: Input, Output, Options, Queue
 - Batch Workspace ต้องมี summary จำนวนไฟล์และ readiness เพื่อให้ผู้ใช้ไม่ต้องอ่านสถานะจากตารางอย่างเดียว
+- Batch Workspace ต้องมี overall progress bar เพื่อให้ผู้ใช้เห็น progress รวมของ queue โดยไม่ต้องอ่านทีละ row
 - ข้อความใน UI ต้องเป็น action-oriented: ชื่อ control ต้องบอกสิ่งที่จะเกิดขึ้นเมื่อผู้ใช้กด
+- Empty state ของ Preview/Properties ต้องนำทางผู้ใช้ว่าขั้นตอนแรกควรทำอะไร
 - UI ต้องใช้ OS-native theme เป็นหลัก เพื่อให้หน้าตาเข้ากับ Windows/Linux และลดภาระดูแล custom style
 - UI ต้องมี `About Dev` เพื่อให้เครดิต `Developer: Masteriii (MT)` โดยไม่ใส่ข้อมูลส่วนตัว/ข้อมูลระบุตัวตนเกินจำเป็น
 - UI สำหรับงานจำนวนมากต้องเน้น scan ได้เร็ว, spacing สม่ำเสมอ, และสถานะสำคัญต้องมองเห็นทันที
@@ -119,6 +123,9 @@
 - Export policy ที่ไม่ต้องพึ่ง Qt เช่น settings fingerprint, resume match, output conflict และ output writeability อยู่ใน `app/mtpdflogo/application/export_policy.py`
 - Batch readiness และ export preflight ต้องเป็น pure application policy ที่ test ได้โดยไม่ต้อง instantiate `QMainWindow`
 - Batch export execution ต้องอยู่ใน `app/mtpdflogo/application/export_engine.py` และ Qt signal adapter อยู่ใน `app/mtpdflogo/presentation/qt_export_worker.py`
+- Overlay settings-to-spec mapping ต้องอยู่ใน `app/mtpdflogo/application/overlay_mapper.py`
+- Queue/readiness wording ต้องอยู่ใน `app/mtpdflogo/application/queue_state.py`
+- Page Search/Regex preview ต้องอยู่ใน `app/mtpdflogo/application/page_search.py`
 - Coverage gate เริ่มต้นที่ 75% พร้อม branch coverage และต้องค่อย ๆ ยกระดับเป็น 85%/90% หลังแยก orchestration tests เพิ่ม
 - Smoke tests สำหรับ zip installer อยู่ใน `tests/smoke/` และต้องรันด้วย `--run-installer-smoke --no-cov` หลัง build zip
 - QA evidence สำหรับ release รอบ 2026-09-05 อยู่ใน `docs/QA_TEST_REPORT_2026-09-05.md`

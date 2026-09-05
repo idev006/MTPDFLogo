@@ -9,6 +9,7 @@ from mtpdflogo.application.overlay_mapper import (
     overlays_to_specs,
     page_filter_error,
     page_text_rule_from_options,
+    safe_regex_error,
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
@@ -90,6 +91,9 @@ def test_page_filter_validation_and_rule_options() -> None:
         "Regex ไม่ถูกต้อง"
     )
     assert page_filter_error(enabled=True, keyword=r"\d+", use_regex=True) is None
+    assert page_filter_error(enabled=True, keyword="(a+)+$", use_regex=True).startswith(
+        "Regex เสี่ยง"
+    )
 
     assert page_text_rule_from_options(
         enabled=False,
@@ -113,3 +117,9 @@ def test_page_filter_validation_and_rule_options() -> None:
 
 def test_color_to_rgb_float_falls_back_to_black() -> None:
     assert color_to_rgb_float("not-a-color") == (0.0, 0.0, 0.0)
+
+
+def test_safe_regex_error_blocks_high_risk_patterns() -> None:
+    assert safe_regex_error(r"(.*)+") is not None
+    assert safe_regex_error("a" * 501) == "Regex ยาวเกินไป: จำกัด 500 ตัวอักษร"
+    assert safe_regex_error(r"invoice\s+\d+") is None

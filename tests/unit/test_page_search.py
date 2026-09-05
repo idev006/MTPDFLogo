@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import fitz
-from mtpdflogo.application.page_search import search_pdf_pages
+from mtpdflogo.application.page_search import search_pdf_batch, search_pdf_pages
 from mtpdflogo.config.resources import font_directory
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule
 
@@ -89,3 +89,23 @@ def test_search_pdf_pages_supports_thai_unicode_normalization(tmp_path: Path) ->
     assert result.matched_pages == 1
     assert result.total_occurrences == 1
     assert [hit.page_number for hit in result.hits] == [2]
+
+
+def test_search_pdf_batch_summarizes_many_files_and_skips_images(tmp_path: Path) -> None:
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    image = tmp_path / "scan.png"
+    _make_search_pdf(first, ["amount 100", "amount 200"])
+    _make_search_pdf(second, ["no match", "still no match"])
+    image.write_bytes(b"not a real image for search summary")
+
+    result = search_pdf_batch([first, image, second], PageTextRule("amount"))
+
+    assert result.file_count == 3
+    assert result.pdf_count == 2
+    assert result.skipped_non_pdf == 1
+    assert result.matched_files == 1
+    assert result.page_count == 4
+    assert result.matched_pages == 2
+    assert result.total_occurrences == 2
+    assert [document.source for document in result.documents] == [first, second]

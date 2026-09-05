@@ -166,12 +166,29 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert not workspace.childrenCollapsible()
     assert window.queue_table.minimumHeight() >= 170
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
+    assert window.batch_progress.value() == 0
+    assert window.batch_progress.format() == "พร้อมเริ่มเมื่อข้อมูลครบ"
     assert window.worker_count.value() >= 1
     assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
     assert window.page_filter_enabled.text() == "วางเฉพาะหน้าที่พบคำนี้"
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
+
+
+def test_empty_state_guides_first_time_user(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    scene_text = "\n".join(
+        item.toPlainText()
+        for item in window._scene.items()
+        if isinstance(item, QGraphicsTextItem)
+    )
+
+    assert "เลือก PDF/รูปภาพ เพื่อเริ่ม" in scene_text
+    assert "+ Text หรือ + Logo" in window.selected_item_label.text()
+    assert "ยังไม่มี overlay" in window.overlay_list.toolTip()
 
 
 def test_layout_tab_supports_absolute_position_controls(qtbot) -> None:
@@ -199,6 +216,19 @@ def test_layout_tab_supports_absolute_position_controls(qtbot) -> None:
     window.reset_to_preset.click()
 
     assert window._overlays[0]["position_mode"] is PositionMode.PRESET
+
+
+def test_properties_tab_is_preserved_when_switching_overlay_items(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    window._append_overlay(OverlayType.IMAGE, "")
+    layout_index = 1
+    window.properties_tabs.setCurrentIndex(layout_index)
+
+    window.overlay_list.setCurrentRow(0)
+
+    assert window.properties_tabs.currentIndex() == layout_index
 
 
 def test_preview_drop_updates_only_dragged_item_to_absolute(qtbot) -> None:
@@ -473,6 +503,17 @@ def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) ->
     assert f"Workers: {window.worker_count.value()}" in window.queue_summary.text()
 
 
+def test_batch_overall_progress_updates_from_worker_signal(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._update_batch_progress(42, "input.pdf")
+
+    assert window.batch_progress.value() == 42
+    assert window.batch_progress.format() == "42% — input.pdf"
+    assert "42% — input.pdf" in window.statusBar().currentMessage()
+
+
 def test_destination_uses_configured_output_suffix(qtbot, tmp_path) -> None:
     source = tmp_path / "input.pdf"
     output = tmp_path / "out"
@@ -671,6 +712,18 @@ def test_page_filter_rejects_invalid_regex(qtbot) -> None:
     assert "Regex ไม่ถูกต้อง" in window.pipeline_summary.text()
 
 
+def test_page_filter_rejects_high_risk_regex(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_regex.setChecked(True)
+    window.page_filter_keyword.setText("(a+)+$")
+
+    assert window._page_filter_error() is not None
+    assert "Regex เสี่ยง" in window.pipeline_summary.text()
+
+
 def test_page_filter_test_button_reports_matching_pages(qtbot, tmp_path) -> None:
     source = tmp_path / "search-preview.pdf"
     document = fitz.open()
@@ -694,6 +747,44 @@ def test_page_filter_test_button_reports_matching_pages(qtbot, tmp_path) -> None
 
     assert "พบ 2/3 หน้า" in window.page_filter_result.text()
     assert "หน้า 1, 3" in window.page_filter_result.text()
+
+
+def test_page_filter_queue_button_reports_batch_search_summary(qtbot, tmp_path) -> None:
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    image = tmp_path / "scan.png"
+    for path, texts in (
+        (first, ["invoice amount 100", "amount amount"]),
+        (second, ["no match", "still no match"]),
+    ):
+        document = fitz.open()
+        for text in texts:
+            page = document.new_page(width=300, height=180)
+            page.insert_text((36, 72), text)
+        document.save(path)
+        document.close()
+    image.write_bytes(b"fake")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._populate_queue(
+        [
+            (first, tmp_path / "out" / "first-watermask.pdf"),
+            (image, tmp_path / "out" / "scan-watermask.png"),
+            (second, tmp_path / "out" / "second-watermask.pdf"),
+        ]
+    )
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_keyword.setText("amount")
+    window.page_filter_min.setValue(1)
+    window.page_filter_max.setValue(0)
+
+    window._test_page_filter_on_queue()
+
+    summary = window.page_filter_result.text()
+    assert "ทั้ง Queue พบ 1/2 PDF" in summary
+    assert "2/4 หน้า" in summary
+    assert "รวม 3 ครั้ง" in summary
+    assert "ข้ามรูปภาพ/ไฟล์ที่ไม่ใช่ PDF 1 ไฟล์" in summary
 
 
 def test_batch_controls_are_ready_after_export_finished_without_clearing(

@@ -28,6 +28,19 @@ class DocumentSearchResult:
     hits: list[PageSearchHit]
 
 
+@dataclass(frozen=True, slots=True)
+class BatchSearchResult:
+    documents: list[DocumentSearchResult]
+    skipped_non_pdf: int
+    file_count: int
+    pdf_count: int
+    matched_files: int
+    page_count: int
+    matched_pages: int
+    total_occurrences: int
+    elapsed_seconds: float
+
+
 def search_pdf_pages(
     source: Path,
     rule: PageTextRule,
@@ -68,6 +81,39 @@ def search_pdf_pages(
         total_occurrences=total_occurrences,
         elapsed_seconds=time.perf_counter() - started,
         hits=hits,
+    )
+
+
+def search_pdf_batch(
+    sources: list[Path],
+    rule: PageTextRule,
+    *,
+    max_hits_per_file: int | None = 5,
+) -> BatchSearchResult:
+    """Search many input files and summarize PDF-only page matches.
+
+    Non-PDF inputs are skipped because page text filters only apply to PDF text
+    layers; image watermark exports do not have searchable page text.
+    """
+    started = time.perf_counter()
+    documents: list[DocumentSearchResult] = []
+    skipped_non_pdf = 0
+    for source in sources:
+        if source.suffix.lower() != ".pdf":
+            skipped_non_pdf += 1
+            continue
+        documents.append(search_pdf_pages(source, rule, max_hits=max_hits_per_file))
+    matched_files = sum(1 for result in documents if result.matched_pages > 0)
+    return BatchSearchResult(
+        documents=documents,
+        skipped_non_pdf=skipped_non_pdf,
+        file_count=len(sources),
+        pdf_count=len(documents),
+        matched_files=matched_files,
+        page_count=sum(result.page_count for result in documents),
+        matched_pages=sum(result.matched_pages for result in documents),
+        total_occurrences=sum(result.total_occurrences for result in documents),
+        elapsed_seconds=time.perf_counter() - started,
     )
 
 

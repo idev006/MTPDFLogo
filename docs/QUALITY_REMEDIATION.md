@@ -82,6 +82,9 @@ Page filtering counts matches anywhere in a page text layer.
 Plain text matching normalizes with Unicode NFKD and removes whitespace before matching, so Thai text such as `จำนวนเงิน` can match extracted forms such as `จํานวนเงิน`.
 
 Regex matching normalizes the pattern and page content with Unicode NFKD. UI validation compiles the same normalized pattern used during export.
+Regex rules cache compiled patterns and normalized keywords so large documents do not repeat this setup on every page.
+User-supplied regex now has a first-line safety guard for excessive length and nested quantifier patterns that commonly cause severe backtracking.
+Search can be tested against the current preview PDF or summarized across every PDF in the queue before export.
 
 ### Batch Cancellation
 
@@ -102,8 +105,11 @@ Preview now supports:
 - zoom in, zoom out, and fit
 - Ctrl + mouse wheel zoom
 - drag/drop positioning on the currently selected preview page
+- first-run empty state guidance before any file is opened
 
 Clicking an overlay without moving it no longer changes the item from preset positioning to absolute positioning.
+
+Batch Workspace now includes an overall progress bar and clearer Thai copy for readiness/search states.
 
 ## Remaining Follow-Up
 

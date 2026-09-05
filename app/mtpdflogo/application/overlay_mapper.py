@@ -15,6 +15,8 @@ from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 
 _HEX_COLOR_PATTERN = re.compile(r"^#?([0-9a-fA-F]{6})$")
+_MAX_REGEX_PATTERN_LENGTH = 500
+_NESTED_QUANTIFIER_PATTERN = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*{]")
 
 
 def missing_logo_paths(overlays: list[dict[str, Any]]) -> list[str]:
@@ -96,10 +98,22 @@ def page_filter_error(
     if not keyword:
         return "ใส่คำหรือ regex ที่จะใช้กรองหน้าก่อนเริ่ม Batch"
     if use_regex:
+        safety_error = safe_regex_error(keyword)
+        if safety_error:
+            return safety_error
         try:
             re.compile(PageTextRule(keyword, use_regex=True).normalized_pattern())
         except re.error as error:
             return f"Regex ไม่ถูกต้อง: {error}"
+    return None
+
+
+def safe_regex_error(pattern: str) -> str | None:
+    """Return a user-facing blocker for regex patterns likely to hang."""
+    if len(pattern) > _MAX_REGEX_PATTERN_LENGTH:
+        return f"Regex ยาวเกินไป: จำกัด {_MAX_REGEX_PATTERN_LENGTH} ตัวอักษร"
+    if _NESTED_QUANTIFIER_PATTERN.search(pattern):
+        return "Regex เสี่ยงทำให้ค้นหาช้ามาก: หลีกเลี่ยง nested quantifier เช่น (a+)+"
     return None
 
 
