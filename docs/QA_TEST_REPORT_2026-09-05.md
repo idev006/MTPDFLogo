@@ -2,10 +2,10 @@
 
 วันที่ทดสอบ: 2026-09-05 07:00 +07:00  
 Branch: `feature/free-position-drag-drop`  
-Commit: `ef3ed47 Add Windows CI and installer smoke workflow`  
+Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: `6083AF06129855F8130DC49D3CC0BEEC306F9FA0345BE2884E92655415B8AE01`
+Artifact SHA256: `2FDF5B74167FFC8DF22FD35F61DC1005C9D8EA1CC6EB63A6ACAF8BC30ED0CBC5`
 
 ## Executive Summary
 
@@ -23,8 +23,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 86 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 75.26% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 92 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 75.90% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -46,6 +46,20 @@ Evidence:
 - Resource tests: `tests/unit/test_config_loader.py`
 - Release tests: `tests/unit/test_release_package.py`
 - Smoke tests: `tests/smoke/test_source_zip_installer.py`
+
+### Core engine policy pipeline
+
+Covered:
+
+- batch readiness can be evaluated without PySide widgets
+- preflight blocks missing jobs, invalid page filters, missing logo assets, unsafe nested output folders, invalid jobs, missing effective overlays, writeability failures, and output conflicts
+- preflight returns manifest path and settings fingerprint for worker startup
+- `MainWindow` now acts more like an adapter for readiness/preflight decisions
+
+Evidence:
+
+- `app/mtpdflogo/application/export_policy.py`
+- `tests/unit/test_export_policy.py`
 
 ### PDF/image selection and batch planning
 
@@ -202,7 +216,7 @@ Evidence:
 P1:
 
 - เพิ่ม worker-level tests สำหรับ `ExportWorker` หลายไฟล์จริง: success, one fail, cancel, resume skip
-- แยก readiness/preflight state machine ออกจาก `main_window.py`
+- แยก readiness/preflight state machine ออกจาก `main_window.py` เพิ่มเติมจน UI เหลือ wrapper บางที่สุด
 - เพิ่ม Retry Failed workflow พร้อม attempt metadata ใน manifest
 
 P2:
@@ -218,4 +232,3 @@ MTPDFLogo ผ่าน quality gate สำหรับ release-governed Windows 
 และ workflow หลักของ PDF/image watermark batch ผ่าน automated regression suite
 
 สถานะ: **Ready for controlled release/testing by users**
-

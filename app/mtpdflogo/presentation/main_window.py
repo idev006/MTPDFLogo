@@ -66,16 +66,16 @@ from mtpdflogo.application.batch import (
     SUPPORTED_IMAGE_SUFFIXES,
     SUPPORTED_INPUT_SUFFIXES,
     BatchJob,
+    build_jobs,
     discover_supported_files,
     job_key,
     load_manifest,
     output_is_inside_input,
     save_manifest,
-    validate_jobs,
 )
 from mtpdflogo.application.export_policy import (
-    output_conflict_issues,
-    output_root_write_error,
+    evaluate_batch_readiness,
+    preflight_batch_export,
     settings_fingerprint,
 )
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
@@ -1199,14 +1199,13 @@ class MainWindow(QMainWindow):
 
     def _refresh_batch_readiness(self) -> None:
         self._pending_batch_jobs = self._queue_jobs_from_table()
-        is_running = self._worker is not None and self.cancel_action.isEnabled()
-        page_filter_ready = self._page_filter_error() is None
-        self.start_batch_action.setEnabled(
-            bool(self._pending_batch_jobs)
-            and not is_running
-            and page_filter_ready
-            and self._has_effective_overlay()
+        readiness = evaluate_batch_readiness(
+            has_jobs=bool(self._pending_batch_jobs),
+            is_running=self._worker is not None and self.cancel_action.isEnabled(),
+            page_filter_error=self._page_filter_error(),
+            has_effective_overlay=self._has_effective_overlay(),
         )
+        self.start_batch_action.setEnabled(readiness.can_start)
         self._update_queue_summary()
 
     def _destination_for(
@@ -1215,18 +1214,14 @@ class MainWindow(QMainWindow):
         output_folder: Path,
         input_root: Path | None = None,
     ) -> tuple[Path, Path]:
-        relative_parent = Path()
-        if self.preserve_structure.isChecked() and input_root is not None:
-            try:
-                relative_parent = source.resolve().parent.relative_to(input_root.resolve())
-            except ValueError:
-                relative_parent = Path()
-        return (
-            source,
-            output_folder
-            / relative_parent
-            / f"{source.stem}{self._config.output_suffix}{source.suffix}",
-        )
+        job = build_jobs(
+            [source],
+            output_folder,
+            suffix=self._config.output_suffix,
+            preserve_subfolders=self.preserve_structure.isChecked(),
+            input_root=input_root,
+        )[0]
+        return job.source, job.destination
 
     @staticmethod
     def _is_valid_output_folder(output: Path) -> bool:
@@ -1889,76 +1884,31 @@ class MainWindow(QMainWindow):
             self._update_queue_summary()
 
     def _start_export(self, jobs: list[tuple[Path, Path]]) -> bool:
-        page_filter_error = self._page_filter_error()
-        if page_filter_error:
-            QMessageBox.warning(
-                self,
-                "เงื่อนไขหน้ายังไม่ครบ",
-                page_filter_error,
-            )
-            self._refresh_batch_readiness()
-            return False
-        missing_logos = self._missing_logo_paths(self._overlays)
-        if missing_logos:
-            QMessageBox.warning(
-                self,
-                "Logo หาไม่พบ",
-                "กรุณาเลือกไฟล์ Logo ใหม่ก่อน Export:\n" + "\n".join(missing_logos[:8]),
-            )
-            self._refresh_batch_readiness()
-            return False
-        batch_jobs = [BatchJob(source, destination) for source, destination in jobs]
-        issues = validate_jobs(batch_jobs)
-        if issues:
-            details = "\n".join(f"{issue.source}: {issue.message}" for issue in issues)
-            QMessageBox.warning(self, "Batch Preflight ไม่ผ่าน", details)
-            self._refresh_batch_readiness()
-            return False
         output_text = self.batch_output_folder.text().strip()
         output_root = Path(output_text) if output_text else jobs[0][1].parent
-        if output_is_inside_input(self._input_root, output_root):
-            QMessageBox.warning(
-                self,
-                "Output Folder ไม่ปลอดภัย",
-                "Output Folder ต้องไม่อยู่ภายใน Input Folder เพื่อกันการประมวลผลไฟล์ output ซ้ำ",
-            )
-            self._refresh_batch_readiness()
-            return False
-        if not self._has_effective_overlay():
-            QMessageBox.warning(
-                self,
-                "ยังไม่มี Overlay",
-                "กรุณาเพิ่มข้อความหรือเลือกไฟล์ Logo ก่อน Export",
-            )
-            self._refresh_batch_readiness()
-            return False
-        write_error = output_root_write_error(output_root)
-        if write_error:
-            QMessageBox.warning(
-                self,
-                "Output Folder เขียนไม่ได้",
-                f"ไม่สามารถเขียนไฟล์ทดสอบใน Output Folder ได้:\n{write_error}",
-            )
-            self._refresh_batch_readiness()
-            return False
         specs = self._to_specs()
         page_text_rule = self._page_text_rule()
-        current_settings_fingerprint = settings_fingerprint(specs, page_text_rule)
-        manifest_path = output_root / ".mtpdflogo-batch-status.json"
-        output_conflicts = output_conflict_issues(
-            jobs,
-            manifest_path,
-            current_settings_fingerprint,
+        preflight = preflight_batch_export(
+            jobs=jobs,
+            input_root=self._input_root,
+            output_root=output_root,
+            has_effective_overlay=self._has_effective_overlay(),
+            page_filter_error=self._page_filter_error(),
+            missing_logo_paths=self._missing_logo_paths(self._overlays),
+            specs=specs,
+            page_text_rule=page_text_rule,
             overwrite=self.overwrite_outputs.isChecked(),
             resume_enabled=self._config.resume_enabled,
         )
-        if output_conflicts:
+        if not preflight.ok:
             QMessageBox.warning(
                 self,
-                "Output มีอยู่แล้ว",
-                "พบ output เดิมและยังไม่ได้เปิดเขียนทับ:\n"
-                + "\n".join(output_conflicts[:8]),
+                preflight.title or "Batch Preflight ไม่ผ่าน",
+                preflight.message or "ไม่สามารถเริ่ม Batch ได้",
             )
+            self._refresh_batch_readiness()
+            return False
+        if preflight.manifest_path is None:
             self._refresh_batch_readiness()
             return False
         self._last_export_jobs = jobs
@@ -1967,7 +1917,7 @@ class MainWindow(QMainWindow):
             jobs,
             specs,
             page_text_rule,
-            manifest_path,
+            preflight.manifest_path,
             self.worker_count.value(),
             self._config.resume_enabled,
         )

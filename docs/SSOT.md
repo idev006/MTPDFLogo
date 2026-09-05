@@ -115,6 +115,7 @@
 - PDF text export ต้องใช้ renderer ที่รองรับ Thai/Unicode glyphs จาก font ที่เลือกจริง ห้ามปล่อยให้ข้อความไทยกลายเป็น `????`
 - Runtime resources เช่น config และ fonts ต้องโหลดได้ทั้ง source tree, editable install, package install, และ zip installer layout
 - Export policy ที่ไม่ต้องพึ่ง Qt เช่น settings fingerprint, resume match, output conflict และ output writeability อยู่ใน `app/mtpdflogo/application/export_policy.py`
+- Batch readiness และ export preflight ต้องเป็น pure application policy ที่ test ได้โดยไม่ต้อง instantiate `QMainWindow`
 - Coverage gate เริ่มต้นที่ 75% พร้อม branch coverage และต้องค่อย ๆ ยกระดับเป็น 85%/90% หลังแยก orchestration tests เพิ่ม
 - Smoke tests สำหรับ zip installer อยู่ใน `tests/smoke/` และต้องรันด้วย `--run-installer-smoke --no-cov` หลัง build zip
 - QA evidence สำหรับ release รอบ 2026-09-05 อยู่ใน `docs/QA_TEST_REPORT_2026-09-05.md`

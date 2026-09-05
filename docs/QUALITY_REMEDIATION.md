@@ -116,6 +116,7 @@ Implemented in the 2026-09-05 governance pass:
 - Windows CI workflow at `.github/workflows/windows-ci.yml`
 - clean source zip smoke tests under `tests/smoke/`
 - export policy extraction under `app/mtpdflogo/application/export_policy.py`
+- batch readiness and preflight decision extraction under `app/mtpdflogo/application/export_policy.py`
 - build zip exclusions for `.egg-info`, cache folders, and bytecode
 
 Still deferred:
