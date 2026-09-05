@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import multiprocessing
 import os
 import re
-import threading
-from concurrent.futures import FIRST_COMPLETED, CancelledError, ProcessPoolExecutor, wait
 from pathlib import Path
-from queue import Empty
 from typing import Any
 
 import fitz
-from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import Qt, QThread, QUrl
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -65,18 +61,13 @@ from PySide6.QtWidgets import (
 from mtpdflogo.application.batch import (
     SUPPORTED_IMAGE_SUFFIXES,
     SUPPORTED_INPUT_SUFFIXES,
-    BatchJob,
     build_jobs,
     discover_supported_files,
-    job_key,
-    load_manifest,
     output_is_inside_input,
-    save_manifest,
 )
 from mtpdflogo.application.export_policy import (
     evaluate_batch_readiness,
     preflight_batch_export,
-    settings_fingerprint,
 )
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
 from mtpdflogo.config import (
@@ -88,12 +79,11 @@ from mtpdflogo.config import (
     save_preferences,
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.infrastructure.image_overlay_service import apply_image_overlays
 from mtpdflogo.infrastructure.pdf.overlay_service import (
     PageTextRule,
     PdfOverlaySpec,
-    apply_overlays,
 )
+from mtpdflogo.presentation.qt_export_worker import ExportWorker
 
 
 class DraggableTextItem(QGraphicsTextItem):
@@ -167,215 +157,6 @@ class PreviewGraphicsView(QGraphicsView):
             event.accept()
             return
         super().wheelEvent(event)
-
-
-def _process_file_job(
-    source: Path,
-    destination: Path,
-    specs: list[PdfOverlaySpec],
-    page_text_rule: PageTextRule | None,
-    cancel_event: Any,
-    progress_queue: Any,
-) -> None:
-    """Top-level worker function so it is safe for Windows spawn/PyInstaller."""
-    processor = (
-        apply_image_overlays
-        if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
-        else apply_overlays
-    )
-    if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
-        processor(
-            source,
-            destination,
-            specs,
-            cancel_check=cancel_event.is_set,
-            progress_callback=lambda current, total: progress_queue.put(
-                (str(source), current, total)
-            ),
-        )
-    else:
-        processor(
-            source,
-            destination,
-            specs,
-            page_text_rule=page_text_rule,
-            cancel_check=cancel_event.is_set,
-            progress_callback=lambda current, total: progress_queue.put(
-                (str(source), current, total)
-            ),
-        )
-
-
-class ExportWorker(QObject):
-    progress = Signal(int, str)
-    file_progress = Signal(str, int, int)
-    file_updated = Signal(str, str, int)
-    file_failed = Signal(str, str)
-    finished = Signal(str)
-    failed = Signal(str)
-
-    def __init__(
-        self,
-        jobs: list[tuple[Path, Path]],
-        specs: list[PdfOverlaySpec],
-        page_text_rule: PageTextRule | None,
-        manifest_path: Path,
-        worker_count: int,
-        resume_enabled: bool = True,
-    ) -> None:
-        super().__init__()
-        self.jobs = jobs
-        self.specs = specs
-        self.page_text_rule = page_text_rule
-        self.manifest_path = manifest_path
-        self.worker_count = worker_count
-        self.resume_enabled = resume_enabled
-        self.settings_fingerprint = settings_fingerprint(specs, page_text_rule)
-        self.cancel_event = threading.Event()
-        self.process_cancel_event: Any | None = None
-
-    def cancel(self) -> None:
-        self.cancel_event.set()
-        if self.process_cancel_event is not None:
-            self.process_cancel_event.set()
-
-    def run(self) -> None:
-        """Run jobs while forwarding real page-level progress to the UI."""
-        total = len(self.jobs)
-        completed = 0
-        failures = 0
-        manifest = load_manifest(self.manifest_path)
-        pending_jobs: list[tuple[Path, Path]] = []
-        for source, destination in self.jobs:
-            key = job_key(BatchJob(source, destination))
-            try:
-                source_stat = source.stat()
-            except OSError as error:
-                failures += 1
-                manifest[key] = {"status": "failed", "error": str(error)}
-                save_manifest(self.manifest_path, manifest)
-                self.file_updated.emit(str(source), "Failed", 0)
-                self.file_failed.emit(str(source), str(error))
-                continue
-            record = manifest.get(key, {})
-            if (
-                self.resume_enabled
-                and record.get("status") == "completed"
-                and record.get("source_size") == source_stat.st_size
-                and record.get("source_mtime_ns") == source_stat.st_mtime_ns
-                and record.get("settings_fingerprint") == self.settings_fingerprint
-                and destination.exists()
-            ):
-                completed += 1
-                self.file_progress.emit(str(source), 1, 1)
-                self.file_updated.emit(str(source), "Completed", 100)
-            else:
-                pending_jobs.append((source, destination))
-        if not pending_jobs:
-            self.finished.emit(f"ไม่มีไฟล์ใหม่ — ข้าม {completed} ไฟล์ที่เสร็จแล้ว")
-            return
-        try:
-            worker_count = min(max(1, self.worker_count), len(pending_jobs))
-            context = multiprocessing.get_context("spawn")
-            with multiprocessing.Manager() as manager:
-                progress_queue = manager.Queue()
-                self.process_cancel_event = manager.Event()
-                if self.cancel_event.is_set():
-                    self.process_cancel_event.set()
-                with ProcessPoolExecutor(max_workers=worker_count, mp_context=context) as pool:
-                    job_queue = list(pending_jobs)
-                    futures: dict[Any, tuple[Path, Path]] = {}
-
-                    def submit_next() -> Any | None:
-                        if self.cancel_event.is_set() or not job_queue:
-                            return None
-                        source, destination = job_queue.pop(0)
-                        future = pool.submit(
-                            _process_file_job,
-                            source,
-                            destination,
-                            self.specs,
-                            self.page_text_rule,
-                            self.process_cancel_event,
-                            progress_queue,
-                        )
-                        futures[future] = (source, destination)
-                        return future
-
-                    for _ in range(worker_count):
-                        submit_next()
-                    pending = set(futures)
-                    while pending:
-                        try:
-                            while True:
-                                name, current, pages = progress_queue.get_nowait()
-                                self.file_progress.emit(name, current, pages)
-                        except Empty:
-                            pass
-                        if self.cancel_event.is_set():
-                            self.process_cancel_event.set()
-                            for future in pending:
-                                future.cancel()
-                        done, pending = wait(
-                            pending, timeout=0.2, return_when=FIRST_COMPLETED
-                        )
-                        for future in done:
-                            source, destination = futures[future]
-                            key = job_key(BatchJob(source, destination))
-                            try:
-                                source_stat = source.stat()
-                                future.result()
-                            except CancelledError:
-                                self.file_updated.emit(str(source), "Cancelled", 0)
-                                continue
-                            except Exception as error:
-                                if self.cancel_event.is_set() and "batch cancelled" in str(error):
-                                    self.file_updated.emit(str(source), "Cancelled", 0)
-                                    continue
-                                failures += 1
-                                try:
-                                    source_stat = source.stat()
-                                    source_size = source_stat.st_size
-                                    source_mtime_ns = source_stat.st_mtime_ns
-                                except OSError:
-                                    source_size = 0
-                                    source_mtime_ns = 0
-                                manifest[key] = {
-                                    "status": "failed", "error": str(error),
-                                    "source_size": source_size,
-                                    "source_mtime_ns": source_mtime_ns,
-                                    "settings_fingerprint": self.settings_fingerprint,
-                                }
-                                save_manifest(self.manifest_path, manifest)
-                                self.file_updated.emit(str(source), "Failed", 0)
-                                self.file_failed.emit(str(source), str(error))
-                            else:
-                                completed += 1
-                                manifest[key] = {
-                                    "status": "completed", "source_size": source_stat.st_size,
-                                    "source_mtime_ns": source_stat.st_mtime_ns,
-                                    "settings_fingerprint": self.settings_fingerprint,
-                                }
-                                save_manifest(self.manifest_path, manifest)
-                                self.file_progress.emit(str(source), 1, 1)
-                                self.file_updated.emit(str(source), "Completed", 100)
-                            self.progress.emit(
-                                int((completed + failures) * 100 / total), source.name
-                            )
-                            next_future = submit_next()
-                            if next_future is not None:
-                                pending.add(next_future)
-                self.process_cancel_event = None
-            if self.cancel_event.is_set():
-                self.finished.emit(
-                    f"ยกเลิกแล้ว: สำเร็จ {completed} ไฟล์ | Workers: {worker_count}"
-                )
-            else:
-                self.finished.emit(
-                    f"สำเร็จ {completed} ไฟล์, ล้มเหลว {failures} ไฟล์ | Workers: {worker_count}"
-                )
-        except Exception as error:  # pragma: no cover - worker/UI boundary
-            self.failed.emit(str(error))
 
 
 class MainWindow(QMainWindow):

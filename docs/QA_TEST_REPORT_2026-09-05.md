@@ -5,7 +5,7 @@ Branch: `feature/free-position-drag-drop`
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: `2FDF5B74167FFC8DF22FD35F61DC1005C9D8EA1CC6EB63A6ACAF8BC30ED0CBC5`
+Artifact SHA256: 411F390F721ABE98C0B4FDBE5B1C4BE0B31AC30E42C2A101AB9AAF27292CB2EF
 
 ## Executive Summary
 
@@ -23,8 +23,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 92 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 75.90% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 98 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 77.63% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -55,10 +55,17 @@ Covered:
 - preflight blocks missing jobs, invalid page filters, missing logo assets, unsafe nested output folders, invalid jobs, missing effective overlays, writeability failures, and output conflicts
 - preflight returns manifest path and settings fingerprint for worker startup
 - `MainWindow` now acts more like an adapter for readiness/preflight decisions
+- batch export engine runs outside the Qt UI module
+- Qt worker adapter maps engine callbacks to the existing signal contract
+- worker process routing remains a top-level function for Windows spawn/PyInstaller compatibility
 
 Evidence:
 
+- `app/mtpdflogo/application/export_engine.py`
 - `app/mtpdflogo/application/export_policy.py`
+- `app/mtpdflogo/presentation/qt_export_worker.py`
+- `tests/unit/test_export_engine.py`
+- `tests/unit/test_qt_export_worker.py`
 - `tests/unit/test_export_policy.py`
 
 ### PDF/image selection and batch planning
@@ -216,7 +223,7 @@ Evidence:
 P1:
 
 - เพิ่ม worker-level tests สำหรับ `ExportWorker` หลายไฟล์จริง: success, one fail, cancel, resume skip
-- แยก readiness/preflight state machine ออกจาก `main_window.py` เพิ่มเติมจน UI เหลือ wrapper บางที่สุด
+- แยก queue state และ overlay-to-spec mapper ออกจาก `main_window.py` เพิ่มเติมจน UI เหลือ wrapper บางที่สุด
 - เพิ่ม Retry Failed workflow พร้อม attempt metadata ใน manifest
 
 P2:

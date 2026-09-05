@@ -117,10 +117,12 @@ Implemented in the 2026-09-05 governance pass:
 - clean source zip smoke tests under `tests/smoke/`
 - export policy extraction under `app/mtpdflogo/application/export_policy.py`
 - batch readiness and preflight decision extraction under `app/mtpdflogo/application/export_policy.py`
+- headless export engine extraction under `app/mtpdflogo/application/export_engine.py`
+- Qt worker adapter extraction under `app/mtpdflogo/presentation/qt_export_worker.py`
 - build zip exclusions for `.egg-info`, cache folders, and bytecode
 
 Still deferred:
 
-- split `ExportWorker` and QThread/process orchestration out of `main_window.py`
+- split queue state and overlay-to-spec mapping out of `main_window.py`
 - add explicit Retry Failed workflow and persisted attempt metadata
 - add visual regression tests for preview/export parity
