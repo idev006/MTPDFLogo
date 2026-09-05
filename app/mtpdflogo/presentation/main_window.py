@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +68,16 @@ from mtpdflogo.application.export_policy import (
     evaluate_batch_readiness,
     preflight_batch_export,
 )
+from mtpdflogo.application.overlay_mapper import (
+    has_effective_overlay,
+    missing_logo_paths,
+    overlays_to_specs,
+    page_filter_error,
+    page_text_rule_from_options,
+)
+from mtpdflogo.application.page_search import search_pdf_pages
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
+from mtpdflogo.application.queue_state import blocked_start_message, queue_summary_text
 from mtpdflogo.config import (
     font_directory,
     load_config,
@@ -79,10 +87,7 @@ from mtpdflogo.config import (
     save_preferences,
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.infrastructure.pdf.overlay_service import (
-    PageTextRule,
-    PdfOverlaySpec,
-)
+from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 from mtpdflogo.presentation.qt_export_worker import ExportWorker
 
 
@@ -174,6 +179,7 @@ class MainWindow(QMainWindow):
         self._overlays: list[dict[str, Any]] = []
         self._pending_batch_jobs: list[tuple[Path, Path]] = []
         self._last_export_jobs: list[tuple[Path, Path]] = []
+        self._batch_readiness_reason = "missing_jobs"
         self._preview_bakes_overlays = True
         self._preview_zoom = 1.0
         self._preview_page_index = 0
@@ -193,10 +199,12 @@ class MainWindow(QMainWindow):
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
-        action = toolbar.addAction("เลือก File(s)")
+        action = toolbar.addAction("เลือกไฟล์")
+        action.setToolTip("เลือก PDF/รูปภาพ หนึ่งไฟล์หรือหลายไฟล์")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         action.triggered.connect(self._select_input_files)
-        action = toolbar.addAction("เลือก Folder")
+        action = toolbar.addAction("เลือกโฟลเดอร์ต้นทาง")
+        action.setToolTip("โหลด PDF/รูปภาพ จากโฟลเดอร์ต้นทาง")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
         action.triggered.connect(self._choose_batch_input_folder)
         action = toolbar.addAction("เพิ่ม Text")
@@ -227,11 +235,13 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.recent_settings)
         self._update_recent_settings_control()
         toolbar.addSeparator()
-        action = toolbar.addAction("Export Current File")
+        action = toolbar.addAction("Export ไฟล์ปัจจุบัน")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
         action.triggered.connect(self._export_single)
-        self.start_batch_action = toolbar.addAction("▶ Start Batch")
+        self.start_batch_action = toolbar.addAction("▶ เริ่ม Batch")
         self.start_batch_action.setEnabled(False)
+        self.start_batch_action.setToolTip("เริ่มไม่ได้: ยังไม่มีไฟล์ใน queue")
+        self.start_batch_action.setStatusTip("เริ่มไม่ได้: ยังไม่มีไฟล์ใน queue")
         self.start_batch_action.triggered.connect(self._start_pending_batch)
         self.cancel_action = toolbar.addAction("หยุด Batch")
         self.cancel_action.setToolTip("หยุดรับงานใหม่ และรอไฟล์ที่กำลังทำอยู่จบอย่างปลอดภัย")
@@ -277,7 +287,7 @@ class MainWindow(QMainWindow):
             ("1", "เลือกไฟล์/โฟลเดอร์"),
             ("2", "ตั้ง Text/Logo"),
             ("3", "ตั้ง Output"),
-            ("4", "Start Batch"),
+            ("4", "เริ่ม Batch"),
             ("5", "ตรวจ Output"),
         ]
         for number, text in steps:
@@ -357,12 +367,16 @@ class MainWindow(QMainWindow):
             status_item = self.queue_table.item(row, 5)
             status = status_item.text() if status_item else "Pending"
             statuses[status] = statuses.get(status, 0) + 1
-        output_ready = bool(self._pending_batch_jobs) and self.start_batch_action.isEnabled()
-        status_text = ", ".join(f"{name}: {count}" for name, count in sorted(statuses.items()))
-        ready_text = "พร้อมเริ่ม" if output_ready else "รอ Output Folder หรือ settings"
         workers = self.worker_count.value() if hasattr(self, "worker_count") else 1
         self.queue_summary.setText(
-            f"{total} ไฟล์ใน queue | {status_text} | Workers: {workers} | {ready_text}"
+            queue_summary_text(
+                total=total,
+                statuses=statuses,
+                output_ready=bool(self._pending_batch_jobs)
+                and self.start_batch_action.isEnabled(),
+                workers=workers,
+                readiness_reason=self._batch_readiness_reason,
+            )
         )
 
     @staticmethod
@@ -376,7 +390,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         header = QHBoxLayout()
-        title = QLabel("Batch Workspace")
+        title = QLabel("Batch Workspace — เลือกไฟล์ ตั้งค่า แล้วเริ่มประมวลผล")
         title.setObjectName("sectionTitle")
         header.addWidget(title)
         header.addStretch()
@@ -388,7 +402,7 @@ class MainWindow(QMainWindow):
         header.addWidget(clear)
         layout.addLayout(header)
         setup_row = QHBoxLayout()
-        input_group = QGroupBox("Input")
+        input_group = QGroupBox("Input — ไฟล์ต้นทาง")
         input_row = QHBoxLayout(input_group)
         input_row.addWidget(QLabel("Folder:"))
         self.batch_input_folder = QLineEdit()
@@ -401,7 +415,7 @@ class MainWindow(QMainWindow):
         input_row.addWidget(browse_input)
         input_row.addWidget(load_folder)
         setup_row.addWidget(input_group, 2)
-        output_group = QGroupBox("Output")
+        output_group = QGroupBox("Output — โฟลเดอร์ปลายทาง")
         output_row = QHBoxLayout(output_group)
         output_row.addWidget(QLabel("Folder:"))
         self.batch_output_folder = QLineEdit(
@@ -418,7 +432,7 @@ class MainWindow(QMainWindow):
         output_row.addWidget(self.open_output_folder_button)
         self._update_output_folder_button()
         setup_row.addWidget(output_group, 2)
-        options_group = QGroupBox("Options")
+        options_group = QGroupBox("Options — การประมวลผล")
         options_layout = QVBoxLayout(options_group)
         options_row = QHBoxLayout()
         self.recursive_input = QCheckBox("Recursive")
@@ -461,7 +475,10 @@ class MainWindow(QMainWindow):
         options_row.addWidget(self.open_output_folder_on_finish)
         options_layout.addLayout(options_row)
         filter_row = QHBoxLayout()
-        self.page_filter_enabled = QCheckBox("เฉพาะหน้าที่พบคำ")
+        self.page_filter_enabled = QCheckBox("วางเฉพาะหน้าที่พบคำนี้")
+        self.page_filter_enabled.setToolTip(
+            "ใช้ text layer ของ PDF ไม่ใช่ OCR; ถ้า PDF เป็นสแกนล้วนอาจค้นไม่พบ"
+        )
         self.page_filter_enabled.toggled.connect(self._page_filter_changed)
         self.page_filter_keyword = QLineEdit()
         self.page_filter_keyword.setPlaceholderText("เช่น จำนวนเงิน หรือ regex")
@@ -480,12 +497,21 @@ class MainWindow(QMainWindow):
         filter_row.addWidget(self.page_filter_enabled)
         filter_row.addWidget(self.page_filter_keyword, 1)
         filter_row.addWidget(self.page_filter_regex)
-        filter_row.addWidget(QLabel("จำนวน"))
+        filter_row.addWidget(QLabel("จำนวนครั้งต่อหน้า: อย่างน้อย"))
         filter_row.addWidget(self.page_filter_min)
-        filter_row.addWidget(QLabel("ถึง"))
+        filter_row.addWidget(QLabel("ไม่เกิน"))
         filter_row.addWidget(self.page_filter_max)
         filter_row.addWidget(QLabel("ครั้ง"))
+        self.test_page_filter_button = QPushButton("ทดสอบ Search")
+        self.test_page_filter_button.setToolTip(
+            "ทดสอบกับไฟล์ที่กำลัง preview อยู่ เพื่อดูว่าจะวาง overlay หน้าใด"
+        )
+        self.test_page_filter_button.clicked.connect(self._test_page_filter_on_current_file)
+        filter_row.addWidget(self.test_page_filter_button)
         options_layout.addLayout(filter_row)
+        self.page_filter_result = QLabel("Search ยังไม่ได้ทดสอบ")
+        self.page_filter_result.setWordWrap(True)
+        options_layout.addWidget(self.page_filter_result)
         self._page_filter_changed()
         setup_row.addWidget(options_group, 1)
         layout.addLayout(setup_row)
@@ -734,6 +760,7 @@ class MainWindow(QMainWindow):
         output_text = self.batch_output_folder.text().strip()
         if not output_text:
             self._pending_batch_jobs = []
+            self._batch_readiness_reason = "missing_output"
             self.start_batch_action.setEnabled(False)
             self._update_output_folder_button()
             self._update_pipeline("เลือก Output Folder ก่อนเริ่มงาน")
@@ -741,6 +768,7 @@ class MainWindow(QMainWindow):
         output = Path(output_text)
         if not self._is_valid_output_folder(output):
             self._pending_batch_jobs = []
+            self._batch_readiness_reason = "missing_output"
             self.start_batch_action.setEnabled(False)
             self._update_output_folder_button()
             self.statusBar().showMessage(f"Output Folder ไม่ถูกต้อง: {output}")
@@ -765,6 +793,7 @@ class MainWindow(QMainWindow):
     def _apply_output_folder(self, output: Path, summary: str) -> None:
         if output_is_inside_input(self._input_root, output):
             self._pending_batch_jobs = []
+            self._batch_readiness_reason = "missing_output"
             self.start_batch_action.setEnabled(False)
             self._update_output_folder_button()
             self.statusBar().showMessage("Output Folder ต้องไม่อยู่ภายใน Input Folder")
@@ -794,6 +823,9 @@ class MainWindow(QMainWindow):
         self.page_filter_regex.setEnabled(enabled)
         self.page_filter_min.setEnabled(enabled)
         self.page_filter_max.setEnabled(enabled)
+        self.test_page_filter_button.setEnabled(enabled)
+        if not enabled:
+            self.page_filter_result.setText("Search ปิดอยู่ — จะวาง overlay ทุกหน้า")
         error = self._page_filter_error()
         if error:
             self.start_batch_action.setEnabled(False)
@@ -803,30 +835,55 @@ class MainWindow(QMainWindow):
         if hasattr(self, "queue_table"):
             self._refresh_batch_readiness()
 
-    def _page_filter_error(self) -> str | None:
+    def _test_page_filter_on_current_file(self) -> None:
         if not self.page_filter_enabled.isChecked():
-            return None
-        keyword = self.page_filter_keyword.text().strip()
-        if not keyword:
-            return "ใส่คำหรือ regex ที่จะใช้กรองหน้าก่อนเริ่ม Batch"
-        if self.page_filter_regex.isChecked():
-            try:
-                re.compile(PageTextRule(keyword, use_regex=True).normalized_pattern())
-            except re.error as error:
-                return f"Regex ไม่ถูกต้อง: {error}"
-        return None
+            self.page_filter_result.setText("Search ปิดอยู่ — จะวาง overlay ทุกหน้า")
+            return
+        error = self._page_filter_error()
+        if error:
+            self.page_filter_result.setText(error)
+            self._update_pipeline(error)
+            return
+        if self._pdf_path is None:
+            self.page_filter_result.setText("เปิด PDF ก่อนทดสอบ Search")
+            return
+        rule = self._page_text_rule()
+        if rule is None:
+            self.page_filter_result.setText("ใส่คำหรือ regex ก่อนทดสอบ Search")
+            return
+        try:
+            result = search_pdf_pages(self._pdf_path, rule, max_hits=20)
+        except Exception as error:
+            self.page_filter_result.setText(f"Search ล้มเหลว: {error}")
+            return
+        pages = ", ".join(str(hit.page_number) for hit in result.hits)
+        hidden = result.matched_pages - len(result.hits)
+        suffix = f" และอีก {hidden} หน้า" if hidden > 0 else ""
+        if result.matched_pages:
+            self.page_filter_result.setText(
+                f"พบ {result.matched_pages}/{result.page_count} หน้า "
+                f"รวม {result.total_occurrences} ครั้ง: หน้า {pages}{suffix} "
+                f"({result.elapsed_seconds:.2f}s)"
+            )
+        else:
+            self.page_filter_result.setText(
+                f"ไม่พบหน้าที่ตรงเงื่อนไขใน {result.page_count} หน้า "
+                f"({result.elapsed_seconds:.2f}s)"
+            )
+
+    def _page_filter_error(self) -> str | None:
+        return page_filter_error(
+            enabled=self.page_filter_enabled.isChecked(),
+            keyword=self.page_filter_keyword.text(),
+            use_regex=self.page_filter_regex.isChecked(),
+        )
 
     def _page_text_rule(self) -> PageTextRule | None:
-        if not self.page_filter_enabled.isChecked():
-            return None
-        keyword = self.page_filter_keyword.text().strip()
-        if not keyword:
-            return None
-        max_occurrences = self.page_filter_max.value()
-        return PageTextRule(
-            keyword=keyword,
+        return page_text_rule_from_options(
+            enabled=self.page_filter_enabled.isChecked(),
+            keyword=self.page_filter_keyword.text(),
             min_occurrences=self.page_filter_min.value(),
-            max_occurrences=max_occurrences if max_occurrences > 0 else None,
+            max_occurrences=self.page_filter_max.value(),
             use_regex=self.page_filter_regex.isChecked(),
         )
 
@@ -986,7 +1043,11 @@ class MainWindow(QMainWindow):
             page_filter_error=self._page_filter_error(),
             has_effective_overlay=self._has_effective_overlay(),
         )
+        self._batch_readiness_reason = readiness.reason
         self.start_batch_action.setEnabled(readiness.can_start)
+        start_message = blocked_start_message(readiness.reason)
+        self.start_batch_action.setToolTip(start_message)
+        self.start_batch_action.setStatusTip(start_message)
         self._update_queue_summary()
 
     def _destination_for(
@@ -1402,24 +1463,10 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _missing_logo_paths(overlays: list[dict[str, Any]]) -> list[str]:
-        missing: list[str] = []
-        for item in overlays:
-            if item.get("type") is not OverlayType.IMAGE:
-                continue
-            asset_path = str(item.get("asset_path", "")).strip()
-            if not asset_path:
-                missing.append(f"{item.get('id', 'logo')}: ยังไม่ได้เลือกไฟล์ Logo")
-            elif not Path(asset_path).exists():
-                missing.append(asset_path)
-        return missing
+        return missing_logo_paths(overlays)
 
     def _has_effective_overlay(self) -> bool:
-        for item in self._overlays:
-            if item.get("type") is OverlayType.TEXT and str(item.get("text", "")).strip():
-                return True
-            if item.get("type") is OverlayType.IMAGE and str(item.get("asset_path", "")).strip():
-                return True
-        return False
+        return has_effective_overlay(self._overlays)
 
     def _show_about_dev(self) -> None:
         QMessageBox.about(self, "About Dev", self._about_dev_text())
@@ -1622,21 +1669,7 @@ class MainWindow(QMainWindow):
             self._refresh_preview()
 
     def _to_specs(self) -> list[PdfOverlaySpec]:
-        specs: list[PdfOverlaySpec] = []
-        for item in self._overlays:
-            color = QColor(item["color"])
-            specs.append(PdfOverlaySpec(
-                overlay_type=item["type"], position=item["position"], text=item["text"],
-                position_mode=item.get("position_mode", PositionMode.PRESET),
-                x_percent=float(item.get("x_percent", 50.0)),
-                y_percent=float(item.get("y_percent", 50.0)),
-                asset_path=Path(item["asset_path"]) if item["asset_path"] else None,
-                font_size=item["font_size"], font_path=self._font_path(item["font"]),
-                color=(color.redF(), color.greenF(), color.blueF()),
-                opacity=item["opacity"] / 100, rotation=item["rotation"],
-                width_percent=item["logo_size"],
-            ))
-        return specs
+        return overlays_to_specs(self._overlays, self._font_path)
 
     def _export_single(self) -> None:
         if self._source_path is None:

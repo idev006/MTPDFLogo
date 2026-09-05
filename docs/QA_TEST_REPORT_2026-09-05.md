@@ -5,7 +5,7 @@ Branch: `feature/free-position-drag-drop`
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: 411F390F721ABE98C0B4FDBE5B1C4BE0B31AC30E42C2A101AB9AAF27292CB2EF
+Artifact SHA256: E3BD473DA42FBDE317AAE220553D7F1B503CC4D81E883C3F1264A941F47E0B9E
 
 ## Executive Summary
 
@@ -23,8 +23,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 98 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 77.63% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 117 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 78.29% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -44,6 +44,7 @@ Evidence:
 
 - CI workflow: `.github/workflows/windows-ci.yml`
 - Resource tests: `tests/unit/test_config_loader.py`
+- PyInstaller contract tests: `tests/unit/test_pyinstaller_spec_contract.py`
 - Release tests: `tests/unit/test_release_package.py`
 - Smoke tests: `tests/smoke/test_source_zip_installer.py`
 
@@ -116,11 +117,15 @@ Covered:
 - rotated logo regression
 - page-level progress callback
 - page text filtering by keyword/regex
+- cached normalized keyword/compiled regex reuse for large page searches
+- early stop when occurrences exceed configured max count
 
 Evidence:
 
 - `tests/integration/test_overlay_service.py`
+- `tests/unit/test_page_search.py`
 - `app/mtpdflogo/infrastructure/pdf/overlay_service.py`
+- `app/mtpdflogo/application/page_search.py`
 
 ### Image export correctness
 
@@ -141,10 +146,12 @@ Evidence:
 
 Covered:
 
-- single `เลือก File(s)` button
+- single `เลือกไฟล์` button
 - separate input folder and output folder controls
 - output path can be chosen or pasted into textbox
 - queue table shows rows for selected files
+- queue summary uses Thai user-facing status names
+- disabled `เริ่ม Batch` action explains its blocker through tooltip/status tip
 - rows can be removed/cleared
 - start button does not auto-run after selection
 - start/cancel button state during and after batch
@@ -170,6 +177,7 @@ Covered:
 - `install.bat` exists and supports non-interactive CI path
 - `start.bat` exists
 - `start-debug.bat` exists for visible traceback
+- `install.sh` and `start.sh` exist for POSIX/Linux source zip installs
 - `build.bat` installs dev dependencies before lint/test/build
 - built zip contains required source/config/font files
 - built zip does not contain `.venv`, cache folders, bytecode, `.egg-info`, `build/`, or `dist/`
@@ -183,6 +191,9 @@ Evidence:
 - `install.bat`
 - `start.bat`
 - `start-debug.bat`
+- `install.sh`
+- `start.sh`
+- `.github/workflows/linux-ci.yml`
 - `tests/smoke/test_source_zip_installer.py`
 - `.github/workflows/windows-ci.yml`
 
@@ -205,6 +216,8 @@ Evidence:
 - ผู้ใช้ export PDF แนวตั้ง/แนวนอน
 - ผู้ใช้ export image PNG/JPG/JPEG
 - ผู้ใช้แจกจ่าย source zip แล้วติดตั้งด้วย `install.bat`
+- ผู้ใช้บน Linux มี source zip entrypoint ผ่าน `install.sh` และ `start.sh`
+- ผู้ใช้ทดสอบ Search/Regex กับไฟล์ preview ปัจจุบันและเห็นหน้าที่ match, จำนวนครั้ง, และเวลา
 
 ## Not Fully Claimed / Remaining Risks
 
@@ -216,21 +229,24 @@ Evidence:
 - disk full, permission denied แบบ OS-level ที่เกิดระหว่างเขียนไฟล์จริง
 - race condition ระดับสูงมากใน process pool เมื่อไฟล์ fail/ถูก cancel พร้อมกันจำนวนมาก
 - visual regression แบบ pixel-perfect สำหรับ preview/export parity ทุก rotation/opacity/font
-- Linux CI/script parity เพราะ release script ปัจจุบันเน้น Windows source zip installer
+- Linux GUI smoke บน display server จริงยังไม่ถูก claim; รอบนี้ครอบคลุม Linux headless CI/import/test/launcher contract
+- regex แบบ catastrophic backtracking จาก pattern ที่ผู้ใช้กำหนดยังไม่มี timeout guard เต็มรูปแบบ
+- Search preview ปัจจุบันทดสอบไฟล์ preview ปัจจุบัน ไม่ใช่ทั้ง batch queue
 
 ## World-class Follow-up Backlog
 
 P1:
 
 - เพิ่ม worker-level tests สำหรับ `ExportWorker` หลายไฟล์จริง: success, one fail, cancel, resume skip
-- แยก queue state และ overlay-to-spec mapper ออกจาก `main_window.py` เพิ่มเติมจน UI เหลือ wrapper บางที่สุด
 - เพิ่ม Retry Failed workflow พร้อม attempt metadata ใน manifest
+- เพิ่ม Batch Search Preview: matched files/pages สำหรับทั้ง queue
+- เพิ่ม safe-regex policy หรือ timeout/process isolation สำหรับ regex ที่เสี่ยง catastrophic backtracking
 
 P2:
 
 - เพิ่ม visual regression golden/region assertions สำหรับตำแหน่ง, opacity, rotation
 - เพิ่ม tests สำหรับ corrupt/encrypted PDF และ permission failure
-- เพิ่ม Linux CI สำหรับ library-level tests และ script ทางเลือกบน Linux
+- เพิ่ม Linux GUI smoke ด้วย xvfb หรือเครื่อง Linux จริง
 - ยกระดับ coverage gate จาก 75% เป็น 85% แล้วค่อยไป 90%
 
 ## Verdict

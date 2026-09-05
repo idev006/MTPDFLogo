@@ -33,8 +33,8 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
     toolbar = window.findChild(QToolBar, "mainToolbar")
     action_labels = [action.text() for action in toolbar.actions()]
 
-    assert action_labels.count("เลือก File(s)") == 1
-    assert action_labels.count("เลือก Folder") == 1
+    assert action_labels.count("เลือกไฟล์") == 1
+    assert action_labels.count("เลือกโฟลเดอร์ต้นทาง") == 1
     assert "เพิ่ม Text+Logo" in action_labels
     assert "บันทึก Default" in action_labels
     assert "โหลด Default" in action_labels
@@ -45,7 +45,7 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
         "1  เลือกไฟล์/โฟลเดอร์",
         "2  ตั้ง Text/Logo",
         "3  ตั้ง Output",
-        "4  Start Batch",
+        "4  เริ่ม Batch",
         "5  ตรวจ Output",
     ]
     assert window.pipeline_summary.text() == "รอเลือกไฟล์"
@@ -161,14 +161,14 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     groups = {group.title() for group in window.findChildren(QGroupBox)}
     workspace = window.findChild(QSplitter, "workspaceSplitter")
 
-    assert {"Input", "Output", "Options"}.issubset(groups)
+    assert {"Input — ไฟล์ต้นทาง", "Output — โฟลเดอร์ปลายทาง", "Options — การประมวลผล"}.issubset(groups)
     assert workspace is not None
     assert not workspace.childrenCollapsible()
     assert window.queue_table.minimumHeight() >= 170
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
     assert window.worker_count.value() >= 1
     assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
-    assert window.page_filter_enabled.text() == "เฉพาะหน้าที่พบคำ"
+    assert window.page_filter_enabled.text() == "วางเฉพาะหน้าที่พบคำนี้"
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
@@ -455,10 +455,14 @@ def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) ->
     window._append_overlay(OverlayType.TEXT)
     window._populate_queue([(source, Path())])
 
+    assert not window.start_batch_action.isEnabled()
+    assert "ยังไม่มีไฟล์ใน queue" in window.start_batch_action.toolTip()
+
     window.batch_output_folder.setText(str(output))
     qtbot.keyClick(window.batch_output_folder, Qt.Key.Key_Enter)
 
     assert window.start_batch_action.isEnabled()
+    assert window.start_batch_action.toolTip() == "พร้อมเริ่ม Batch"
     assert window.queue_table.item(0, 3).text() == str(output / "input-watermask.pdf")
     assert "1 ไฟล์ใน queue" in window.queue_summary.text()
     assert f"Workers: {window.worker_count.value()}" in window.queue_summary.text()
@@ -665,6 +669,31 @@ def test_page_filter_rejects_invalid_regex(qtbot) -> None:
 
     assert window._page_filter_error() is not None
     assert "Regex ไม่ถูกต้อง" in window.pipeline_summary.text()
+
+
+def test_page_filter_test_button_reports_matching_pages(qtbot, tmp_path) -> None:
+    source = tmp_path / "search-preview.pdf"
+    document = fitz.open()
+    first = document.new_page(width=300, height=180)
+    first.insert_text((36, 72), "invoice amount 100")
+    second = document.new_page(width=300, height=180)
+    second.insert_text((36, 72), "no match")
+    third = document.new_page(width=300, height=180)
+    third.insert_text((36, 72), "amount amount")
+    document.save(source)
+    document.close()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_pdf(source)
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_keyword.setText("amount")
+    window.page_filter_min.setValue(1)
+    window.page_filter_max.setValue(0)
+
+    window._test_page_filter_on_current_file()
+
+    assert "พบ 2/3 หน้า" in window.page_filter_result.text()
+    assert "หน้า 1, 3" in window.page_filter_result.text()
 
 
 def test_batch_controls_are_ready_after_export_finished_without_clearing(

@@ -168,6 +168,41 @@ def test_page_text_rule_supports_regex() -> None:
     assert not rule.matches("จํานวนเงิน\nบาท\nเจ็ดพันห้าร้อย")
 
 
+def test_page_text_rule_reuses_compiled_regex_for_large_searches() -> None:
+    rule = PageTextRule(r"\d{3}-\d{3}", use_regex=True)
+
+    first = rule.compiled_regex()
+    second = rule.compiled_regex()
+
+    assert first is second
+    assert rule.count_occurrences("ref 123-456 ref 999-000") == 2
+
+
+def test_page_text_rule_reuses_normalized_plain_keyword() -> None:
+    rule = PageTextRule("จำนวน เงิน")
+
+    first = rule.searchable_keyword()
+    second = rule.searchable_keyword()
+
+    assert first is second
+    assert first == "จํานวนเงิน"
+    assert rule.matches("จํานวน\nเงิน")
+
+
+def test_page_text_rule_stops_regex_counting_after_max_occurrences() -> None:
+    rule = PageTextRule(r"\d+", max_occurrences=2, use_regex=True)
+
+    assert rule.count_occurrences("1 2 3 4 5") == 3
+    assert not rule.matches("1 2 3 4 5")
+
+
+def test_page_text_rule_stops_plain_counting_after_max_occurrences() -> None:
+    rule = PageTextRule("amount", max_occurrences=2)
+
+    assert rule.count_occurrences("amount amount amount amount") == 3
+    assert not rule.matches("amount amount amount amount")
+
+
 def test_thai_text_exports_as_visible_pdf_overlay_without_question_marks_path(
     tmp_path: Path,
 ) -> None:

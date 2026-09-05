@@ -22,6 +22,9 @@ The next target is to raise this to 85% after worker-level and preview/export pa
 The installer zip must install on a clean Windows machine, create `.venv` with `py -3.12`, and start with bundled fonts and `config/app.toml`.
 The current supported delivery format is `dist/MTPDFLogo-installer.zip`, not a frozen executable.
 
+Before claiming Linux compatibility, GitHub Actions Linux CI must pass headless lint/test/import
+smoke. Linux users install from the same source zip through `install.sh` and start with `start.sh`.
+
 ## Fixed Risks
 
 ### Resource Resolution
@@ -34,8 +37,10 @@ The resolver supports:
 - editable installs
 - package installs with bundled `mtpdflogo/resources`
 - zip installer layout
+- PyInstaller `_MEIPASS` layouts for `config/app.toml` and bundled fonts
 
-The zip installer contains `install.bat`, `start.bat`, source files, config, docs, and tests.
+The zip installer contains `install.bat`, `start.bat`, `install.sh`, `start.sh`, source files,
+config, docs, and tests.
 `install.bat` creates `.venv` with `py -3.12` and installs the project into that environment.
 `start-debug.bat` is included for visible startup diagnostics when `start.bat` exits silently.
 The Windows CI workflow runs runtime smoke, lint, pytest coverage gate, source zip build,
@@ -114,15 +119,21 @@ These are not release blockers after the current remediation, but they should be
 Implemented in the 2026-09-05 governance pass:
 
 - Windows CI workflow at `.github/workflows/windows-ci.yml`
+- Linux headless CI workflow at `.github/workflows/linux-ci.yml`
 - clean source zip smoke tests under `tests/smoke/`
 - export policy extraction under `app/mtpdflogo/application/export_policy.py`
 - batch readiness and preflight decision extraction under `app/mtpdflogo/application/export_policy.py`
 - headless export engine extraction under `app/mtpdflogo/application/export_engine.py`
 - Qt worker adapter extraction under `app/mtpdflogo/presentation/qt_export_worker.py`
+- queue summary state extraction under `app/mtpdflogo/application/queue_state.py`
+- overlay settings-to-spec extraction under `app/mtpdflogo/application/overlay_mapper.py`
+- PDF page search preview utility under `app/mtpdflogo/application/page_search.py`
+- POSIX installer launchers: `install.sh`, `start.sh`
+- PyInstaller spec resource layout contract tests
 - build zip exclusions for `.egg-info`, cache folders, and bytecode
 
 Still deferred:
 
-- split queue state and overlay-to-spec mapping out of `main_window.py`
 - add explicit Retry Failed workflow and persisted attempt metadata
 - add visual regression tests for preview/export parity
+- add full Linux GUI smoke on a real display server or xvfb profile

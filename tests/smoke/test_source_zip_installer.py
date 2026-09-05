@@ -13,6 +13,8 @@ REQUIRED_ZIP_ENTRIES = {
     "MTPDFLogo/install.bat",
     "MTPDFLogo/start.bat",
     "MTPDFLogo/start-debug.bat",
+    "MTPDFLogo/install.sh",
+    "MTPDFLogo/start.sh",
     "MTPDFLogo/README_DISTRIBUTION_TH.md",
     "MTPDFLogo/pyproject.toml",
     "MTPDFLogo/app/mtpdflogo/__main__.py",
@@ -63,12 +65,17 @@ def test_installer_and_start_scripts_are_ci_friendly(installer_zip: Path) -> Non
         install_bat = archive.read("MTPDFLogo/install.bat").decode("utf-8")
         start_bat = archive.read("MTPDFLogo/start.bat").decode("utf-8")
         start_debug_bat = archive.read("MTPDFLogo/start-debug.bat").decode("utf-8")
+        install_sh = archive.read("MTPDFLogo/install.sh").decode("utf-8")
+        start_sh = archive.read("MTPDFLogo/start.sh").decode("utf-8")
 
     assert "MTPDFLOGO_NO_PAUSE" in install_bat
     assert ".venv\\Scripts\\pythonw.exe" in start_bat
     assert ".venv\\Scripts\\python.exe" in start_debug_bat
     assert "PYTHONPATH=%PROJECT_DIR%app" in start_bat
     assert "PYTHONPATH=%PROJECT_DIR%app" in start_debug_bat
+    assert "python3.12" in install_sh
+    assert ".venv/bin/python" in start_sh
+    assert "PYTHONPATH=\"$PROJECT_DIR/app" in start_sh
 
 
 @pytest.fixture()

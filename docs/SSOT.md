@@ -21,7 +21,7 @@
 - ประมวลผลหลาย PDF/รูปภาพแบบแยกไฟล์ ไม่รวม PDF
 - รองรับ PDF แนวตั้ง แนวนอน และเอกสารที่มี orientation ผสมกันภายในไฟล์เดียว
 - รองรับรูปภาพ `png`, `jpg`, `jpeg` โดยใช้ Text/Logo settings ชุดเดียวกับ PDF
-- ผู้ใช้ต้องเลือกไฟล์ได้ทั้งไฟล์เดียวและหลายไฟล์ผ่านปุ่ม `เลือก File(s)` เพียงปุ่มเดียว
+- ผู้ใช้ต้องเลือกไฟล์ได้ทั้งไฟล์เดียวและหลายไฟล์ผ่านปุ่ม `เลือกไฟล์` เพียงปุ่มเดียว
 - ผู้ใช้ต้องเลือก Input Folder สำหรับ batch ได้จาก toolbar หรือ Batch Queue panel โดยกำหนดได้ว่าจะ recursive หรือไม่ และจำกัดความลึกกี่ชั้น
 - การเลือกไฟล์ต้องไม่บังคับเลือก destination folder ในจังหวะเดียวกัน
 - ผู้ใช้ตั้งค่า output folder แยกต่างหาก และระบบต้องจำ path ล่าสุดไว้เพื่อความสะดวก
@@ -36,7 +36,9 @@
 - ผู้ใช้ต้องกำหนดจำนวน workers สำหรับ parallel processing ได้จาก UI
 - ผู้ใช้ต้องกรองหน้า PDF ตามจำนวนคำหรือ regex ที่พบในหน้านั้นได้ โดยนับจาก text layer ของ PDF และ normalize ภาษาไทยก่อนเทียบ
 - ต้องรองรับ pytest และ zip installer สำหรับ Windows ที่สร้าง `.venv` ด้วย `py -3.12`
+- Linux ต้องมี `install.sh` และ `start.sh` สำหรับ source zip โดยใช้ Python 3.12 และ `.venv/bin/python`
 - ต้องมี Windows CI บน GitHub Actions สำหรับ lint, pytest coverage gate, runtime import smoke, build zip และ installer smoke
+- ต้องมี Linux CI สำหรับ headless lint/test/import smoke และ launcher contract อย่างน้อยก่อน claim cross-OS regression safety
 
 ## Performance baseline
 
@@ -49,11 +51,11 @@
 
 ## UI/UX and process pipeline
 
-- หน้าจอหลักต้องเป็น workflow เดียวที่อ่านง่าย: เลือกไฟล์/โฟลเดอร์ -> ตั้ง Text/Logo -> ตั้ง Output -> Start Batch -> ตรวจ Output
+- หน้าจอหลักต้องเป็น workflow เดียวที่อ่านง่าย: เลือกไฟล์/โฟลเดอร์ -> ตั้ง Text/Logo -> ตั้ง Output -> เริ่ม Batch -> ตรวจ Output
 - ต้องมี pipeline status ที่สะท้อนสถานะจริงของงาน ไม่ใช่ข้อความตกแต่ง
-- ปุ่ม `Start Batch` ต้องเริ่มงานเท่านั้น ห้ามประมวลผลอัตโนมัติหลังเลือกไฟล์
+- ปุ่ม `เริ่ม Batch` ต้องเริ่มงานเท่านั้น ห้ามประมวลผลอัตโนมัติหลังเลือกไฟล์
 - การเลือกไฟล์และการเลือก Output Folder ต้องเป็นคนละ control ชัดเจน
-- ปุ่มเลือกไฟล์ต้องมีปุ่มเดียว: `เลือก File(s)`
+- ปุ่มเลือกไฟล์ต้องมีปุ่มเดียว: `เลือกไฟล์`
 - Queue table เป็น control หลักของ batch และต้องแสดง input, page count, output, progress, status, error ต่อไฟล์
 - Queue table ต้องมีพื้นที่แนวตั้งมากพอสำหรับงานหลายไฟล์ โดย default ต้องสูงกว่าแถบสถานะเล็ก ๆ และผู้ใช้ต้องลาก splitter เพื่อปรับสัดส่วน preview/queue ได้
 - Batch Queue ต้องมี controls สำหรับ Input Folder, recursive, depth limit, และ preserve folder structure
@@ -74,7 +76,7 @@
 - Output: `input_name-watermask.ext` ใน output folder ที่เลือก
 - เมื่อเปิด `รักษาโครงสร้างโฟลเดอร์ต้นฉบับ` output ต้องคง relative path จาก Input Folder
 - ผู้ใช้ต้องสามารถเลือก output folder ปลายทางได้ก่อนเริ่ม Batch
-- Output folder จาก textbox ต้องถูก validate ว่ามีอยู่จริงและเป็น folder ก่อน enable `Start Batch`
+- Output folder จาก textbox ต้องถูก validate ว่ามีอยู่จริงและเป็น folder ก่อน enable `เริ่ม Batch`
 - การเลือกไฟล์ครั้งใหม่ให้แทนที่ queue เดิม เพื่อให้รายการที่เห็นในตารางคือรายการที่จะประมวลผลจริง
 - หลัง export เสร็จ ผู้ใช้ต้องสามารถล้าง queue เดิมและเลือกไฟล์ชุดใหม่เพื่อเริ่มรอบใหม่ได้โดยไม่ต้องปิดโปรแกรม
 - หลัง export เสร็จ controls ต้องกลับสู่สถานะพร้อมใช้งานโดยไม่บังคับให้ผู้ใช้เคลียร์ค่าเดิม: ปุ่ม Start ต้องกลับมา enabled เมื่อ queue/output ยัง valid และปุ่ม Cancel ต้อง disabled
@@ -113,7 +115,7 @@
 - Opacity ใช้ช่วง 0.0–1.0
 - Font discovery จะอ่านจาก configured font directory
 - PDF text export ต้องใช้ renderer ที่รองรับ Thai/Unicode glyphs จาก font ที่เลือกจริง ห้ามปล่อยให้ข้อความไทยกลายเป็น `????`
-- Runtime resources เช่น config และ fonts ต้องโหลดได้ทั้ง source tree, editable install, package install, และ zip installer layout
+- Runtime resources เช่น config และ fonts ต้องโหลดได้ทั้ง source tree, editable install, package install, zip installer layout และ PyInstaller `_MEIPASS`
 - Export policy ที่ไม่ต้องพึ่ง Qt เช่น settings fingerprint, resume match, output conflict และ output writeability อยู่ใน `app/mtpdflogo/application/export_policy.py`
 - Batch readiness และ export preflight ต้องเป็น pure application policy ที่ test ได้โดยไม่ต้อง instantiate `QMainWindow`
 - Batch export execution ต้องอยู่ใน `app/mtpdflogo/application/export_engine.py` และ Qt signal adapter อยู่ใน `app/mtpdflogo/presentation/qt_export_worker.py`

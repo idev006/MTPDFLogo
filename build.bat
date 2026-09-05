@@ -44,6 +44,8 @@ copy "%PROJECT_DIR%pyproject.toml" "%STAGE_DIR%\pyproject.toml" >nul
 copy "%PROJECT_DIR%install.bat" "%STAGE_DIR%\install.bat" >nul
 copy "%PROJECT_DIR%start.bat" "%STAGE_DIR%\start.bat" >nul
 copy "%PROJECT_DIR%start-debug.bat" "%STAGE_DIR%\start-debug.bat" >nul
+copy "%PROJECT_DIR%install.sh" "%STAGE_DIR%\install.sh" >nul
+copy "%PROJECT_DIR%start.sh" "%STAGE_DIR%\start.sh" >nul
 copy "%PROJECT_DIR%run_mtpdflogo.bat" "%STAGE_DIR%\run_mtpdflogo.bat" >nul
 copy "%PROJECT_DIR%README_DISTRIBUTION_TH.md" "%STAGE_DIR%\README_DISTRIBUTION_TH.md" >nul
 

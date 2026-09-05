@@ -56,6 +56,30 @@ def test_runtime_root_uses_frozen_meipass(monkeypatch, tmp_path: Path) -> None:
     assert runtime_root() == tmp_path
 
 
+def test_frozen_resource_paths_support_pyinstaller_app_assets(monkeypatch, tmp_path: Path) -> None:
+    config = tmp_path / "config" / "app.toml"
+    fonts = tmp_path / "app" / "assets" / "fonts"
+    config.parent.mkdir()
+    fonts.mkdir(parents=True)
+    config.write_text("[app]\nname = \"Frozen\"\n", encoding="utf-8")
+
+    monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+
+    assert config_path() == config
+    assert font_directory() == fonts
+
+
+def test_frozen_font_directory_supports_legacy_assets_layout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fonts = tmp_path / "assets" / "fonts"
+    fonts.mkdir(parents=True)
+    monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+
+    assert font_directory() == fonts
+
+
 def test_first_existing_returns_first_candidate_when_none_exist(tmp_path: Path) -> None:
     first = tmp_path / "missing-first"
     second = tmp_path / "missing-second"

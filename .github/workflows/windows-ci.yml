@@ -75,6 +75,8 @@ jobs:
               'MTPDFLogo/install.bat',
               'MTPDFLogo/start.bat',
               'MTPDFLogo/start-debug.bat',
+              'MTPDFLogo/install.sh',
+              'MTPDFLogo/start.sh',
               'MTPDFLogo/pyproject.toml',
               'MTPDFLogo/app/mtpdflogo/__main__.py',
               'MTPDFLogo/app/mtpdflogo/resources/config/app.toml',

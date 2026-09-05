@@ -6,7 +6,7 @@ import re
 import tempfile
 import unicodedata
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 
@@ -44,18 +44,60 @@ class PageTextRule:
     max_occurrences: int | None = None
     case_sensitive: bool = False
     use_regex: bool = False
+    _compiled_regex: re.Pattern[str] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _searchable_keyword: str | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def normalized_pattern(self) -> str:
         return unicodedata.normalize("NFKD", self.keyword)
 
     def count_occurrences(self, text: str) -> int:
         if self.use_regex:
-            flags = 0 if self.case_sensitive else re.IGNORECASE
             content = unicodedata.normalize("NFKD", text)
-            return len(re.findall(self.normalized_pattern(), content, flags))
-        keyword = _searchable_text(self.keyword, self.case_sensitive)
+            count = 0
+            for _match in self.compiled_regex().finditer(content):
+                count += 1
+                if self.max_occurrences is not None and count > self.max_occurrences:
+                    return count
+            return count
         content = _searchable_text(text, self.case_sensitive)
-        return content.count(keyword)
+        return _count_keyword_occurrences(
+            content,
+            self.searchable_keyword(),
+            stop_after=self.max_occurrences,
+        )
+
+    def compiled_regex(self) -> re.Pattern[str]:
+        """Return a cached regex matching the normalized PDF text layer."""
+        if not self.use_regex:
+            raise ValueError("compiled_regex is only available when use_regex=True")
+        if self._compiled_regex is None:
+            flags = 0 if self.case_sensitive else re.IGNORECASE
+            object.__setattr__(
+                self,
+                "_compiled_regex",
+                re.compile(self.normalized_pattern(), flags),
+            )
+        return self._compiled_regex
+
+    def searchable_keyword(self) -> str:
+        """Return a cached plain keyword normalized the same way pages are searched."""
+        if self._searchable_keyword is None:
+            object.__setattr__(
+                self,
+                "_searchable_keyword",
+                _searchable_text(self.keyword, self.case_sensitive),
+            )
+        return self._searchable_keyword
 
     def matches(self, text: str) -> bool:
         count = self.count_occurrences(text)
@@ -71,6 +113,26 @@ def _searchable_text(value: str, case_sensitive: bool) -> str:
     if not case_sensitive:
         normalized = normalized.casefold()
     return "".join(normalized.split())
+
+
+def _count_keyword_occurrences(
+    content: str,
+    keyword: str,
+    *,
+    stop_after: int | None,
+) -> int:
+    if not keyword:
+        return 0
+    count = 0
+    start = 0
+    while True:
+        index = content.find(keyword, start)
+        if index < 0:
+            return count
+        count += 1
+        if stop_after is not None and count > stop_after:
+            return count
+        start = index + len(keyword)
 
 
 def _requires_explicit_font(value: str) -> bool:

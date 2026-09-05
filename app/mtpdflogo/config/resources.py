@@ -28,6 +28,7 @@ def config_path() -> Path:
 def font_directory() -> Path:
     return _first_existing(
         resource_path("app", "assets", "fonts"),
+        resource_path("assets", "fonts"),
         _package_resource_root() / "assets" / "fonts",
     )
 
