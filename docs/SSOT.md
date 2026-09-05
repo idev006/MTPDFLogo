@@ -60,11 +60,12 @@
 - การเลือกไฟล์และการเลือก Output Folder ต้องเป็นคนละ control ชัดเจน
 - ปุ่มเลือกไฟล์ต้องมีปุ่มเดียว: `เลือกไฟล์`
 - Queue table เป็น control หลักของ batch และต้องแสดง input, page count, output, progress, status, error ต่อไฟล์
-- Queue table ต้องมีพื้นที่แนวตั้งมากพอสำหรับงานหลายไฟล์ โดย default ต้องสูงกว่าแถบสถานะเล็ก ๆ และผู้ใช้ต้องลาก splitter เพื่อปรับสัดส่วน preview/queue ได้
+- Queue table ต้องมีพื้นที่แนวตั้งมากพอสำหรับงานหลายไฟล์ โดย default ต้องสูงอย่างน้อยระดับใช้งานจริง ไม่ถูกบีบจนอ่านไม่ได้ และผู้ใช้ต้องลาก splitter เพื่อปรับสัดส่วน preview/queue ได้
 - Queue table ต้องแสดง error ต่อรายการและมีทางให้ผู้ใช้เปิดรายละเอียด error แบบคัดลอกไปส่งต่อ/ตรวจสอบได้
 - Batch Queue ต้องมี controls สำหรับ Input Folder, recursive, depth limit, และ preserve folder structure
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
-- Batch Queue ต้องจัดเป็น Batch Workspace ที่แบ่งกลุ่ม native controls ชัดเจน: Input, Output, Options, Queue
+- Batch Queue ต้องจัดเป็น Batch Workspace แบบ tabs ตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing โดยไม่ซ่อน Queue table
+- Batch Workspace tabs หรือ panels ที่มี controls จำนวนมากต้อง scroll ได้เฉพาะภายในพื้นที่นั้น ห้ามทำให้ทั้งหน้าจอ desktop scroll แบบ browser
 - Batch Workspace ต้องมี summary จำนวนไฟล์และ readiness เพื่อให้ผู้ใช้ไม่ต้องอ่านสถานะจากตารางอย่างเดียว
 - Batch Workspace ต้องมี overall progress bar เพื่อให้ผู้ใช้เห็น progress รวมของ queue โดยไม่ต้องอ่านทีละ row
 - ข้อความใน UI ต้องเป็น action-oriented: ชื่อ control ต้องบอกสิ่งที่จะเกิดขึ้นเมื่อผู้ใช้กด

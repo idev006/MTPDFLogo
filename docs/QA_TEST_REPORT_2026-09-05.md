@@ -1,11 +1,11 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-05 08:30 +07:00  
+วันที่ทดสอบ: 2026-09-05 09:15 +07:00  
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
-Artifact SHA256: 3FDA60A25D4CD6AA08200FA6F1B5127A81CE5A84F53B7DF80BEE1B909E9BBE6B
+Artifact SHA256: 5D191290841AA08E3FFEB84C8CEB5217EDB239285713F0C259B08AA744652CD3
 
 ## Executive Summary
 
@@ -23,8 +23,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 137 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 79.58% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 138 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 80.07% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -154,6 +154,8 @@ Covered:
 - separate input folder and output folder controls
 - output path can be chosen or pasted into textbox
 - queue table shows rows for selected files
+- batch workspace controls are grouped into tabs so the queue table is not squeezed by long option rows
+- file/output, search/page range, and processing controls remain reachable through native tabs with local scrolling
 - queue summary uses Thai user-facing status names
 - disabled `เริ่ม Batch` action explains its blocker through tooltip/status tip
 - overall progress bar reports batch-level progress
