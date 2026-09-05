@@ -1,6 +1,6 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-05 09:45 +07:00  
+วันที่ทดสอบ: 2026-09-05 10:10 +07:00  
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
@@ -27,8 +27,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 138 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 80.28% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 139 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 80.44% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -161,6 +161,8 @@ Covered:
 - batch workspace uses a two-panel layout: settings tabs on the left and queue monitor on the right
 - file/output, search/page range, and processing controls remain reachable through native tabs with local scrolling
 - queue actions, summary, overall progress, and queue table stay visible together in the right-side monitor panel
+- input/output folder fields use longer full-width rows in the left settings panel
+- numeric batch/search controls expose sliders synchronized with spin boxes for fast and precise adjustment
 - queue summary uses Thai user-facing status names
 - disabled `เริ่ม Batch` action explains its blocker through tooltip/status tip
 - overall progress bar reports batch-level progress

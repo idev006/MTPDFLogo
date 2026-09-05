@@ -26,6 +26,7 @@
 - การเลือกไฟล์ต้องไม่บังคับเลือก destination folder ในจังหวะเดียวกัน
 - ผู้ใช้ตั้งค่า output folder แยกต่างหาก และระบบต้องจำ path ล่าสุดไว้เพื่อความสะดวก
 - ผู้ใช้ตั้งค่า output folder ได้ 2 วิธี: กด `เลือก Folder...` หรือวาง path ลง textbox
+- Textbox สำหรับ input/output folder ต้องยาวพอให้อ่าน path ได้ใน panel ซ้าย โดยไม่บีบเป็นช่องสั้น
 - ผู้ใช้ต้องเลือกได้ว่าจะเปิด output folder อัตโนมัติเมื่อ Batch สำเร็จครบทุกไฟล์หรือไม่ โดย default ต้องปิดไว้และจำค่าเป็น preference
 - ผู้ใช้ต้องบันทึก/โหลดชุด Overlay Settings เป็นไฟล์ TOML ได้
 - โปรแกรมต้องจำ folder ล่าสุดที่ผู้ใช้ใช้ Save/Load Overlay Settings โดยแยกจาก PDF folder และ output folder
@@ -64,6 +65,7 @@
 - Queue table ต้องแสดง error ต่อรายการและมีทางให้ผู้ใช้เปิดรายละเอียด error แบบคัดลอกไปส่งต่อ/ตรวจสอบได้
 - Batch Queue ต้องมี controls สำหรับ Input Folder, recursive, depth limit, และ preserve folder structure
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
+- Numeric controls ใน Batch Workspace เช่น depth, workers และ search occurrence thresholds ต้องมี slider สำหรับปรับเร็ว และยังคง spinbox สำหรับค่าที่ต้องการความแม่นยำ
 - Batch Queue ต้องจัดเป็น Batch Workspace แบบ 2 panel ซ้าย-ขวา: ฝั่งซ้ายเป็น Settings Tabs และฝั่งขวาเป็น Queue Monitor
 - Settings Tabs ฝั่งซ้ายต้องแบ่งตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing
 - Queue Monitor ฝั่งขวาต้องแสดง queue actions, summary, overall progress และ queue table โดยไม่ถูก settings controls บีบพื้นที่

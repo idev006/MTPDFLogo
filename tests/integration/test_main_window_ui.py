@@ -173,6 +173,8 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.batch_tabs.tabText(1) == "Search / ช่วงหน้า"
     assert window.batch_tabs.tabText(2) == "Processing"
     assert window.queue_table.minimumHeight() >= 260
+    assert window.batch_input_folder.minimumWidth() >= 280
+    assert window.batch_output_folder.minimumWidth() >= 280
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
     assert window.batch_progress.value() == 0
     assert window.batch_progress.format() == "พร้อมเริ่มเมื่อข้อมูลครบ"
@@ -180,10 +182,36 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.open_output_folder_on_finish.text() == "เปิด Output เมื่อเสร็จ"
     assert window.page_filter_enabled.text() == "วางเฉพาะหน้าที่พบคำนี้"
     assert window.page_filter_ranges.placeholderText() == "ช่วงหน้า เช่น 1-3,5,10-"
+    assert window.max_depth_slider.value() == window.max_depth.value()
+    assert window.worker_count_slider.value() == window.worker_count.value()
+    assert window.page_filter_min_slider.value() == window.page_filter_min.value()
+    assert window.page_filter_max_slider.value() == window.page_filter_max.value()
     assert window.queue_table.horizontalHeaderItem(1).text() == "Input File"
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
     assert window.queue_table.columnWidth(6) >= 200
+
+
+def test_numeric_sliders_stay_synced_with_spin_boxes(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.max_depth_slider.setValue(7)
+    assert window.max_depth.value() == 7
+    window.max_depth.setValue(3)
+    assert window.max_depth_slider.value() == 3
+
+    worker_target = min(window.worker_count.maximum(), 4)
+    window.worker_count_slider.setValue(worker_target)
+    assert window.worker_count.value() == worker_target
+    window.worker_count.setValue(1)
+    assert window.worker_count_slider.value() == 1
+
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_min_slider.setValue(5)
+    assert window.page_filter_min.value() == 5
+    window.page_filter_max.setValue(20)
+    assert window.page_filter_max_slider.value() == 20
 
 
 def test_empty_state_guides_first_time_user(qtbot) -> None:

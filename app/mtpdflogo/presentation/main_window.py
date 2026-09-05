@@ -486,13 +486,11 @@ class MainWindow(QMainWindow):
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(8, 8, 8, 8)
         container_layout.setSpacing(8)
-        setup_row = QHBoxLayout()
-        setup_row.setContentsMargins(8, 8, 8, 8)
-        setup_row.setSpacing(10)
         input_group = QGroupBox("Input — ไฟล์ต้นทาง")
         input_row = QHBoxLayout(input_group)
         input_row.addWidget(QLabel("Folder:"))
         self.batch_input_folder = QLineEdit()
+        self.batch_input_folder.setMinimumWidth(280)
         self.batch_input_folder.setPlaceholderText("เลือกหรือวาง Folder ต้นทาง")
         browse_input = QPushButton("เลือก Folder...")
         browse_input.clicked.connect(self._choose_batch_input_folder)
@@ -501,13 +499,14 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.batch_input_folder, 1)
         input_row.addWidget(browse_input)
         input_row.addWidget(load_folder)
-        setup_row.addWidget(input_group, 2)
+        container_layout.addWidget(input_group)
         output_group = QGroupBox("Output — โฟลเดอร์ปลายทาง")
         output_row = QHBoxLayout(output_group)
         output_row.addWidget(QLabel("Folder:"))
         self.batch_output_folder = QLineEdit(
             str(self._preferences.output_folder) if self._preferences.output_folder else ""
         )
+        self.batch_output_folder.setMinimumWidth(280)
         self.batch_output_folder.setPlaceholderText("เลือกหรือวาง Folder ปลายทาง")
         self.batch_output_folder.editingFinished.connect(self._batch_output_text_changed)
         browse_output = QPushButton("เลือก Folder...")
@@ -518,8 +517,7 @@ class MainWindow(QMainWindow):
         output_row.addWidget(browse_output)
         output_row.addWidget(self.open_output_folder_button)
         self._update_output_folder_button()
-        setup_row.addWidget(output_group, 2)
-        container_layout.addLayout(setup_row)
+        container_layout.addWidget(output_group)
 
         folder_options = QGroupBox("Folder Options — เมื่อโหลดจากโฟลเดอร์")
         folder_row = QHBoxLayout(folder_options)
@@ -531,11 +529,19 @@ class MainWindow(QMainWindow):
         self.max_depth.setValue(10)
         self.max_depth.setToolTip("0 = เฉพาะ folder นี้, 1 = ลงไป 1 ชั้น")
         self.max_depth.setEnabled(self.recursive_input.isChecked())
+        self.max_depth_slider = QSlider(Qt.Orientation.Horizontal)
+        self.max_depth_slider.setRange(0, 50)
+        self.max_depth_slider.setValue(self.max_depth.value())
+        self.max_depth_slider.setToolTip(self.max_depth.toolTip())
+        self.max_depth_slider.setEnabled(self.recursive_input.isChecked())
+        self.max_depth.valueChanged.connect(self.max_depth_slider.setValue)
+        self.max_depth_slider.valueChanged.connect(self.max_depth.setValue)
         self.preserve_structure = QCheckBox("รักษาโครงสร้าง")
         self.preserve_structure.setChecked(self._config.preserve_subfolders)
         self.preserve_structure.toggled.connect(self._batch_output_text_changed)
         folder_row.addWidget(self.recursive_input)
         folder_row.addWidget(QLabel("ลึกไม่เกิน"))
+        folder_row.addWidget(self.max_depth_slider, 1)
         folder_row.addWidget(self.max_depth)
         folder_row.addWidget(QLabel("ชั้น"))
         folder_row.addWidget(self.preserve_structure)
@@ -577,19 +583,36 @@ class MainWindow(QMainWindow):
         self.page_filter_min.setRange(1, 999)
         self.page_filter_min.setValue(1)
         self.page_filter_min.valueChanged.connect(self._page_filter_changed)
+        self.page_filter_min_slider = QSlider(Qt.Orientation.Horizontal)
+        self.page_filter_min_slider.setRange(1, 999)
+        self.page_filter_min_slider.setValue(self.page_filter_min.value())
+        self.page_filter_min_slider.setToolTip("ปรับจำนวนครั้งขั้นต่ำที่ต้องพบต่อหน้า")
+        self.page_filter_min.valueChanged.connect(self.page_filter_min_slider.setValue)
+        self.page_filter_min_slider.valueChanged.connect(self.page_filter_min.setValue)
         self.page_filter_max = QSpinBox()
         self.page_filter_max.setRange(0, 999)
         self.page_filter_max.setValue(10)
         self.page_filter_max.setSpecialValueText("ไม่จำกัด")
         self.page_filter_max.valueChanged.connect(self._page_filter_changed)
+        self.page_filter_max_slider = QSlider(Qt.Orientation.Horizontal)
+        self.page_filter_max_slider.setRange(0, 999)
+        self.page_filter_max_slider.setValue(self.page_filter_max.value())
+        self.page_filter_max_slider.setToolTip("0 = ไม่จำกัดจำนวนครั้งสูงสุด")
+        self.page_filter_max.valueChanged.connect(self.page_filter_max_slider.setValue)
+        self.page_filter_max_slider.valueChanged.connect(self.page_filter_max.setValue)
         second_row.addWidget(QLabel("ช่วงหน้า"))
         second_row.addWidget(self.page_filter_ranges, 1)
-        second_row.addWidget(QLabel("จำนวนครั้งต่อหน้า: อย่างน้อย"))
-        second_row.addWidget(self.page_filter_min)
-        second_row.addWidget(QLabel("ไม่เกิน"))
-        second_row.addWidget(self.page_filter_max)
-        second_row.addWidget(QLabel("ครั้ง"))
         search_layout.addLayout(second_row)
+
+        occurrence_row = QHBoxLayout()
+        occurrence_row.addWidget(QLabel("อย่างน้อย"))
+        occurrence_row.addWidget(self.page_filter_min_slider, 1)
+        occurrence_row.addWidget(self.page_filter_min)
+        occurrence_row.addWidget(QLabel("ไม่เกิน"))
+        occurrence_row.addWidget(self.page_filter_max_slider, 1)
+        occurrence_row.addWidget(self.page_filter_max)
+        occurrence_row.addWidget(QLabel("ครั้งต่อหน้า"))
+        search_layout.addLayout(occurrence_row)
 
         action_row = QHBoxLayout()
         self.test_page_filter_button = QPushButton("ทดสอบ Search")
@@ -627,7 +650,14 @@ class MainWindow(QMainWindow):
         self.worker_count.setValue(min(self._config.max_workers, self._max_worker_limit()))
         self.worker_count.setToolTip("จำนวนไฟล์ที่ประมวลผลพร้อมกัน")
         self.worker_count.valueChanged.connect(lambda _value: self._update_queue_summary())
+        self.worker_count_slider = QSlider(Qt.Orientation.Horizontal)
+        self.worker_count_slider.setRange(1, self._max_worker_limit())
+        self.worker_count_slider.setValue(self.worker_count.value())
+        self.worker_count_slider.setToolTip("ปรับจำนวนไฟล์ที่ประมวลผลพร้อมกัน")
+        self.worker_count.valueChanged.connect(self.worker_count_slider.setValue)
+        self.worker_count_slider.valueChanged.connect(self.worker_count.setValue)
         options_row.addWidget(QLabel("Workers"))
+        options_row.addWidget(self.worker_count_slider, 1)
         options_row.addWidget(self.worker_count)
         self.overwrite_outputs = QCheckBox("เขียนทับ output เดิม")
         self.overwrite_outputs.setChecked(self._config.overwrite)
@@ -944,6 +974,7 @@ class MainWindow(QMainWindow):
 
     def _recursive_toggled(self, checked: bool) -> None:
         self.max_depth.setEnabled(checked)
+        self.max_depth_slider.setEnabled(checked)
 
     def _page_filter_changed(self, _value: Any = None) -> None:
         if not hasattr(self, "page_filter_keyword"):
@@ -953,7 +984,9 @@ class MainWindow(QMainWindow):
         self.page_filter_ranges.setEnabled(enabled)
         self.page_filter_regex.setEnabled(enabled)
         self.page_filter_min.setEnabled(enabled)
+        self.page_filter_min_slider.setEnabled(enabled)
         self.page_filter_max.setEnabled(enabled)
+        self.page_filter_max_slider.setEnabled(enabled)
         self.test_page_filter_button.setEnabled(enabled)
         self.test_queue_filter_button.setEnabled(enabled)
         if not enabled:
@@ -1650,7 +1683,9 @@ class MainWindow(QMainWindow):
             self.page_filter_keyword,
             self.page_filter_regex,
             self.page_filter_min,
+            self.page_filter_min_slider,
             self.page_filter_max,
+            self.page_filter_max_slider,
             self.page_filter_ranges,
         ]
         for control in controls:
@@ -1659,7 +1694,9 @@ class MainWindow(QMainWindow):
         self.page_filter_keyword.setText(str(settings.get("keyword", "")))
         self.page_filter_regex.setChecked(bool(settings.get("use_regex", False)))
         self.page_filter_min.setValue(int(settings.get("min_occurrences", 1)))
+        self.page_filter_min_slider.setValue(self.page_filter_min.value())
         self.page_filter_max.setValue(int(settings.get("max_occurrences", 10)))
+        self.page_filter_max_slider.setValue(self.page_filter_max.value())
         self.page_filter_ranges.setText(str(settings.get("page_ranges", "")))
         for control in controls:
             control.blockSignals(False)
