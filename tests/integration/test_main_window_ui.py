@@ -160,15 +160,18 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     qtbot.addWidget(window)
     groups = {group.title() for group in window.findChildren(QGroupBox)}
     workspace = window.findChild(QSplitter, "workspaceSplitter")
+    batch_workspace = window.findChild(QSplitter, "batchWorkspaceSplitter")
 
     assert {"Input — ไฟล์ต้นทาง", "Output — โฟลเดอร์ปลายทาง", "Options — การประมวลผล"}.issubset(groups)
     assert workspace is not None
     assert not workspace.childrenCollapsible()
+    assert batch_workspace is not None
+    assert batch_workspace.count() == 2
+    assert not batch_workspace.childrenCollapsible()
     assert window.batch_tabs.count() == 3
     assert window.batch_tabs.tabText(0) == "ไฟล์และปลายทาง"
     assert window.batch_tabs.tabText(1) == "Search / ช่วงหน้า"
     assert window.batch_tabs.tabText(2) == "Processing"
-    assert window.batch_tabs.maximumHeight() <= 190
     assert window.queue_table.minimumHeight() >= 260
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
     assert window.batch_progress.value() == 0

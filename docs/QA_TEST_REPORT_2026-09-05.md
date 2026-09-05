@@ -1,11 +1,15 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-05 09:15 +07:00  
+วันที่ทดสอบ: 2026-09-05 09:45 +07:00  
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
 Artifact SHA256: 4D3EE35DCE369839C74DD9CA26C10EFDF8FA0DF3675999489ED0AD71F3A0C1D9
+
+หมายเหตุ slice ล่าสุด: การปรับ Batch Workspace เป็น 2 panel ซ้าย-ขวาเป็น source-only UI refactor
+ตามคำสั่งผู้ใช้ว่า “ยังไม่ต้องทำตัว install”; artifact hash ด้านบนจึงเป็น installer zip จาก release gate ก่อนหน้า
+ไม่ใช่ zip ที่ rebuild จาก source commit ล่าสุด
 
 ## Executive Summary
 
@@ -24,7 +28,7 @@ installer smoke จาก zip จริง
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
 | Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 138 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 80.12% >= 75% |
+| Coverage gate | configured in `pyproject.toml` | Passed: 80.28% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
@@ -154,8 +158,9 @@ Covered:
 - separate input folder and output folder controls
 - output path can be chosen or pasted into textbox
 - queue table shows rows for selected files
-- batch workspace controls are grouped into tabs so the queue table is not squeezed by long option rows
+- batch workspace uses a two-panel layout: settings tabs on the left and queue monitor on the right
 - file/output, search/page range, and processing controls remain reachable through native tabs with local scrolling
+- queue actions, summary, overall progress, and queue table stay visible together in the right-side monitor panel
 - queue summary uses Thai user-facing status names
 - disabled `เริ่ม Batch` action explains its blocker through tooltip/status tip
 - overall progress bar reports batch-level progress
