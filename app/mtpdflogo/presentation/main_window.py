@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import fitz
-from PySide6.QtCore import Qt, QThread, QUrl
+from PySide6.QtCore import QRect, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -92,6 +92,117 @@ from mtpdflogo.config import (
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 from mtpdflogo.presentation.qt_export_worker import ExportWorker
+
+
+class RangeSlider(QWidget):
+    """Small native-palette range slider for integer min/max settings."""
+
+    rangeChanged = Signal(int, int)
+
+    def __init__(
+        self,
+        minimum: int,
+        maximum: int,
+        lower: int,
+        upper: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._minimum = minimum
+        self._maximum = maximum
+        self._lower = max(minimum, min(lower, maximum))
+        self._upper = max(self._lower, min(upper, maximum))
+        self._active_handle: str | None = None
+        self.setMinimumHeight(28)
+        self.setMinimumWidth(180)
+        self.setMouseTracking(True)
+
+    def lowerValue(self) -> int:
+        return self._lower
+
+    def upperValue(self) -> int:
+        return self._upper
+
+    def setValues(self, lower: int, upper: int) -> None:
+        lower = max(self._minimum, min(lower, self._maximum))
+        upper = max(lower, min(upper, self._maximum))
+        if lower == self._lower and upper == self._upper:
+            return
+        self._lower = lower
+        self._upper = upper
+        self.update()
+        self.rangeChanged.emit(self._lower, self._upper)
+
+    def setLowerValue(self, value: int) -> None:
+        self.setValues(value, self._upper)
+
+    def setUpperValue(self, value: int) -> None:
+        self.setValues(self._lower, value)
+
+    def paintEvent(self, _event: Any) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        groove = self._groove_rect()
+        palette = self.palette()
+        disabled = not self.isEnabled()
+        base_color = palette.mid().color()
+        highlight = palette.highlight().color()
+        handle_color = palette.button().color()
+        if disabled:
+            highlight = palette.mid().color()
+            handle_color = palette.window().color()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(base_color)
+        painter.drawRoundedRect(groove, 3, 3)
+        lower_x = self._value_to_x(self._lower)
+        upper_x = self._value_to_x(self._upper)
+        selected = QRect(lower_x, groove.y(), max(1, upper_x - lower_x), groove.height())
+        painter.setBrush(highlight)
+        painter.drawRoundedRect(selected, 3, 3)
+        painter.setBrush(handle_color)
+        painter.setPen(palette.dark().color())
+        radius = 7
+        center_y = groove.center().y()
+        painter.drawEllipse(lower_x - radius, center_y - radius, radius * 2, radius * 2)
+        painter.drawEllipse(upper_x - radius, center_y - radius, radius * 2, radius * 2)
+
+    def mousePressEvent(self, event: Any) -> None:
+        if not self.isEnabled():
+            return
+        value = self._x_to_value(event.position().x())
+        lower_distance = abs(value - self._lower)
+        upper_distance = abs(value - self._upper)
+        self._active_handle = "lower" if lower_distance <= upper_distance else "upper"
+        self._move_active_handle(value)
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        if self._active_handle is None or not self.isEnabled():
+            return
+        self._move_active_handle(self._x_to_value(event.position().x()))
+
+    def mouseReleaseEvent(self, _event: Any) -> None:
+        self._active_handle = None
+
+    def _move_active_handle(self, value: int) -> None:
+        if self._active_handle == "lower":
+            self.setLowerValue(value)
+        elif self._active_handle == "upper":
+            self.setUpperValue(value)
+
+    def _groove_rect(self) -> QRect:
+        margin = 14
+        return QRect(margin, self.height() // 2 - 3, max(1, self.width() - margin * 2), 6)
+
+    def _value_to_x(self, value: int) -> int:
+        groove = self._groove_rect()
+        span = max(1, self._maximum - self._minimum)
+        return groove.left() + round((value - self._minimum) / span * groove.width())
+
+    def _x_to_value(self, x_position: float) -> int:
+        groove = self._groove_rect()
+        ratio = (x_position - groove.left()) / max(1, groove.width())
+        ratio = max(0.0, min(1.0, ratio))
+        return self._minimum + round(ratio * (self._maximum - self._minimum))
 
 
 class DraggableTextItem(QGraphicsTextItem):
@@ -582,34 +693,33 @@ class MainWindow(QMainWindow):
         self.page_filter_min = QSpinBox()
         self.page_filter_min.setRange(1, 999)
         self.page_filter_min.setValue(1)
-        self.page_filter_min.valueChanged.connect(self._page_filter_changed)
-        self.page_filter_min_slider = QSlider(Qt.Orientation.Horizontal)
-        self.page_filter_min_slider.setRange(1, 999)
-        self.page_filter_min_slider.setValue(self.page_filter_min.value())
-        self.page_filter_min_slider.setToolTip("ปรับจำนวนครั้งขั้นต่ำที่ต้องพบต่อหน้า")
-        self.page_filter_min.valueChanged.connect(self.page_filter_min_slider.setValue)
-        self.page_filter_min_slider.valueChanged.connect(self.page_filter_min.setValue)
+        self.page_filter_min.valueChanged.connect(self._page_filter_min_changed)
         self.page_filter_max = QSpinBox()
         self.page_filter_max.setRange(0, 999)
         self.page_filter_max.setValue(10)
         self.page_filter_max.setSpecialValueText("ไม่จำกัด")
-        self.page_filter_max.valueChanged.connect(self._page_filter_changed)
-        self.page_filter_max_slider = QSlider(Qt.Orientation.Horizontal)
-        self.page_filter_max_slider.setRange(0, 999)
-        self.page_filter_max_slider.setValue(self.page_filter_max.value())
-        self.page_filter_max_slider.setToolTip("0 = ไม่จำกัดจำนวนครั้งสูงสุด")
-        self.page_filter_max.valueChanged.connect(self.page_filter_max_slider.setValue)
-        self.page_filter_max_slider.valueChanged.connect(self.page_filter_max.setValue)
+        self.page_filter_max.valueChanged.connect(self._page_filter_max_changed)
+        self.page_filter_range_slider = RangeSlider(
+            1,
+            999,
+            self.page_filter_min.value(),
+            self.page_filter_max.value(),
+        )
+        self.page_filter_range_slider.setToolTip(
+            "ลากสองด้านเพื่อกำหนดช่วงจำนวนครั้งต่อหน้า; ใช้ช่อง 'ไม่เกิน' = 0 เมื่อต้องการไม่จำกัด"
+        )
+        self.page_filter_range_slider.rangeChanged.connect(
+            self._page_filter_range_slider_changed
+        )
         second_row.addWidget(QLabel("ช่วงหน้า"))
         second_row.addWidget(self.page_filter_ranges, 1)
         search_layout.addLayout(second_row)
 
         occurrence_row = QHBoxLayout()
         occurrence_row.addWidget(QLabel("อย่างน้อย"))
-        occurrence_row.addWidget(self.page_filter_min_slider, 1)
         occurrence_row.addWidget(self.page_filter_min)
+        occurrence_row.addWidget(self.page_filter_range_slider, 1)
         occurrence_row.addWidget(QLabel("ไม่เกิน"))
-        occurrence_row.addWidget(self.page_filter_max_slider, 1)
         occurrence_row.addWidget(self.page_filter_max)
         occurrence_row.addWidget(QLabel("ครั้งต่อหน้า"))
         search_layout.addLayout(occurrence_row)
@@ -976,6 +1086,37 @@ class MainWindow(QMainWindow):
         self.max_depth.setEnabled(checked)
         self.max_depth_slider.setEnabled(checked)
 
+    def _page_filter_min_changed(self, value: int) -> None:
+        if getattr(self, "_syncing_occurrence_controls", False):
+            return
+        self._syncing_occurrence_controls = True
+        if self.page_filter_max.value() != 0 and value > self.page_filter_max.value():
+            self.page_filter_max.setValue(value)
+        upper = self.page_filter_max.value() or self.page_filter_range_slider.upperValue()
+        self.page_filter_range_slider.setValues(value, upper)
+        self._syncing_occurrence_controls = False
+        self._page_filter_changed()
+
+    def _page_filter_max_changed(self, value: int) -> None:
+        if getattr(self, "_syncing_occurrence_controls", False):
+            return
+        self._syncing_occurrence_controls = True
+        if value != 0 and value < self.page_filter_min.value():
+            self.page_filter_min.setValue(value)
+        upper = value or self.page_filter_range_slider.upperValue()
+        self.page_filter_range_slider.setValues(self.page_filter_min.value(), upper)
+        self._syncing_occurrence_controls = False
+        self._page_filter_changed()
+
+    def _page_filter_range_slider_changed(self, lower: int, upper: int) -> None:
+        if getattr(self, "_syncing_occurrence_controls", False):
+            return
+        self._syncing_occurrence_controls = True
+        self.page_filter_min.setValue(lower)
+        self.page_filter_max.setValue(upper)
+        self._syncing_occurrence_controls = False
+        self._page_filter_changed()
+
     def _page_filter_changed(self, _value: Any = None) -> None:
         if not hasattr(self, "page_filter_keyword"):
             return
@@ -984,9 +1125,8 @@ class MainWindow(QMainWindow):
         self.page_filter_ranges.setEnabled(enabled)
         self.page_filter_regex.setEnabled(enabled)
         self.page_filter_min.setEnabled(enabled)
-        self.page_filter_min_slider.setEnabled(enabled)
         self.page_filter_max.setEnabled(enabled)
-        self.page_filter_max_slider.setEnabled(enabled)
+        self.page_filter_range_slider.setEnabled(enabled)
         self.test_page_filter_button.setEnabled(enabled)
         self.test_queue_filter_button.setEnabled(enabled)
         if not enabled:
@@ -1683,9 +1823,8 @@ class MainWindow(QMainWindow):
             self.page_filter_keyword,
             self.page_filter_regex,
             self.page_filter_min,
-            self.page_filter_min_slider,
             self.page_filter_max,
-            self.page_filter_max_slider,
+            self.page_filter_range_slider,
             self.page_filter_ranges,
         ]
         for control in controls:
@@ -1694,9 +1833,11 @@ class MainWindow(QMainWindow):
         self.page_filter_keyword.setText(str(settings.get("keyword", "")))
         self.page_filter_regex.setChecked(bool(settings.get("use_regex", False)))
         self.page_filter_min.setValue(int(settings.get("min_occurrences", 1)))
-        self.page_filter_min_slider.setValue(self.page_filter_min.value())
         self.page_filter_max.setValue(int(settings.get("max_occurrences", 10)))
-        self.page_filter_max_slider.setValue(self.page_filter_max.value())
+        self.page_filter_range_slider.setValues(
+            self.page_filter_min.value(),
+            self.page_filter_max.value() or self.page_filter_range_slider.upperValue(),
+        )
         self.page_filter_ranges.setText(str(settings.get("page_ranges", "")))
         for control in controls:
             control.blockSignals(False)
