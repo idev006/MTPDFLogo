@@ -10,10 +10,12 @@ from mtpdflogo.presentation.main_window import DraggableTextItem, MainWindow
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QGraphicsTextItem,
     QGroupBox,
     QMessageBox,
+    QScrollArea,
     QSplitter,
     QTabWidget,
     QToolBar,
@@ -205,7 +207,22 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.batch_tabs.tabText(0) == "ไฟล์และปลายทาง"
     assert window.batch_tabs.tabText(1) == "Search / ช่วงหน้า"
     assert window.batch_tabs.tabText(2) == "Processing"
+    settings_scrolls = [
+        window.findChild(QScrollArea, "fileOutputSettingsScroll"),
+        window.findChild(QScrollArea, "searchSettingsScroll"),
+        window.findChild(QScrollArea, "processingSettingsScroll"),
+    ]
+    assert all(scroll is not None for scroll in settings_scrolls)
+    assert all(
+        scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        for scroll in settings_scrolls
+        if scroll is not None
+    )
     assert window.queue_table.minimumHeight() >= 320
+    assert window.queue_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert window.queue_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert window.queue_table.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
+    assert window.queue_table.horizontalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
     assert window.batch_input_folder.minimumWidth() >= 280
     assert window.batch_output_folder.minimumWidth() >= 280
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"

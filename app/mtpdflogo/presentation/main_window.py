@@ -601,6 +601,10 @@ class MainWindow(QMainWindow):
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
         self.queue_table.setMinimumHeight(320)
+        self.queue_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.queue_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.queue_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.queue_table.doubleClicked.connect(lambda _index: self._show_selected_queue_error())
         header_view = self.queue_table.horizontalHeader()
         header_view.setStretchLastSection(False)
@@ -691,7 +695,7 @@ class MainWindow(QMainWindow):
         folder_row.addWidget(self.preserve_structure)
         folder_row.addStretch()
         container_layout.addWidget(folder_options)
-        return self._scrollable_tab(container)
+        return self._scrollable_tab(container, "fileOutputSettingsScroll")
 
     def _build_search_tab(self) -> QWidget:
         container = QWidget()
@@ -777,7 +781,7 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.page_filter_result)
         options_layout.addWidget(search_group)
         self._page_filter_changed()
-        return self._scrollable_tab(container)
+        return self._scrollable_tab(container, "searchSettingsScroll")
 
     def _build_processing_tab(self) -> QWidget:
         container = QWidget()
@@ -819,15 +823,16 @@ class MainWindow(QMainWindow):
         options_layout.addLayout(options_row)
         setup_row.addWidget(options_group, 1)
         setup_row.addStretch()
-        return self._scrollable_tab(container)
+        return self._scrollable_tab(container, "processingSettingsScroll")
 
     @staticmethod
-    def _scrollable_tab(content: QWidget) -> QScrollArea:
+    def _scrollable_tab(content: QWidget, object_name: str) -> QScrollArea:
         scroll = QScrollArea()
+        scroll.setObjectName(object_name)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         scroll.setWidget(content)
         return scroll
 
