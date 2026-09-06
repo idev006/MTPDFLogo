@@ -1,13 +1,13 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-06 11:05 +07:00
+วันที่ทดสอบ: 2026-09-06 11:12 +07:00
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
 Artifact SHA256: 4D3EE35DCE369839C74DD9CA26C10EFDF8FA0DF3675999489ED0AD71F3A0C1D9
 
-หมายเหตุ slice ล่าสุด: การปรับ Batch Workspace เป็น tab ชั้นนอก `ตั้งค่างาน` / `Queue Monitor`, เพิ่ม vertical scroll เฉพาะ settings content, ให้ Queue table เป็นเจ้าของ scroll เอง, และทำให้ Preview canvas/resizable splitters มองเห็นและจับลากง่ายขึ้นเป็น source-only UI refactor
+หมายเหตุ slice ล่าสุด: การปรับ Batch Workspace เป็น tab ชั้นนอก `ตั้งค่างาน` / `Queue Monitor`, ให้ settings content scroll เฉพาะเมื่อพื้นที่ไม่พอ, ให้ Queue table เป็นเจ้าของ scroll เอง, และทำให้ Preview canvas/resizable splitters มองเห็นและจับลากง่ายขึ้นเป็น source-only UI refactor
 ตามคำสั่งผู้ใช้ว่า “ยังไม่ต้องทำตัว install”; artifact hash ด้านบนจึงเป็น installer zip จาก release gate ก่อนหน้า
 ไม่ใช่ zip ที่ rebuild จาก source commit ล่าสุด
 

@@ -214,7 +214,7 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     ]
     assert all(scroll is not None for scroll in settings_scrolls)
     assert all(
-        scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
         for scroll in settings_scrolls
         if scroll is not None
     )
