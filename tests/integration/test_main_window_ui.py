@@ -218,6 +218,11 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
         for scroll in settings_scrolls
         if scroll is not None
     )
+    assert all(
+        scroll.widget().minimumHeight() >= scroll.widget().sizeHint().height()
+        for scroll in settings_scrolls
+        if scroll is not None and scroll.widget() is not None
+    )
     assert window.queue_table.minimumHeight() >= 320
     assert window.queue_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     assert window.queue_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
@@ -244,6 +249,23 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
     assert window.queue_table.columnWidth(6) >= 200
+
+
+def test_settings_scroll_area_prevents_bottom_clipping(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1800, 560)
+    window.show()
+    qtbot.waitExposed(window)
+
+    settings_scroll = window.findChild(QScrollArea, "fileOutputSettingsScroll")
+
+    assert settings_scroll is not None
+    assert settings_scroll.widget() is not None
+    assert settings_scroll.widget().minimumHeight() >= settings_scroll.widget().sizeHint().height()
+    settings_scroll.resize(settings_scroll.width(), 120)
+    qtbot.wait(0)
+    assert settings_scroll.verticalScrollBar().maximum() > 0
 
 
 def test_queue_monitor_tab_shows_file_count(qtbot, tmp_path) -> None:

@@ -72,6 +72,7 @@
 - Queue Monitor ต้องแสดง queue actions, summary, overall progress และ queue table เต็มความกว้างของ Batch Workspace โดยไม่ถูก settings controls บีบพื้นที่
 - Batch Workspace tabs หรือ panels ที่มี controls จำนวนมากต้อง scroll ได้เฉพาะภายในพื้นที่นั้น ห้ามทำให้ทั้งหน้าจอ desktop scroll แบบ browser
 - Tab `ตั้งค่างาน` ต้องมี vertical scroll เฉพาะ settings content/sub-tabs เมื่อพื้นที่ไม่พอ เพื่อรองรับจอเตี้ยและ Windows display scaling โดยไม่ดัน Preview/Queue ออกจากหน้าจอ และไม่แสดง scrollbar ถ้าเนื้อหาไม่ล้น
+- Settings content ใน scroll area ต้องไม่ถูก squeeze ต่ำกว่า layout `sizeHint`; ถ้าพื้นที่ไม่พอต้อง scroll ไม่ใช่ clip ด้านล่างของ controls
 - Tab `Queue Monitor` ต้องให้ QTableWidget เป็นเจ้าของ vertical/horizontal scrolling เอง โดย header/actions/summary/progress ยังอยู่ด้านบน ไม่ใส่ scroll ซ้อนทั้ง panel
 - Batch Workspace ต้องมี summary จำนวนไฟล์และ readiness เพื่อให้ผู้ใช้ไม่ต้องอ่านสถานะจากตารางอย่างเดียว
 - Batch Workspace ต้องมี overall progress bar เพื่อให้ผู้ใช้เห็น progress รวมของ queue โดยไม่ต้องอ่านทีละ row
