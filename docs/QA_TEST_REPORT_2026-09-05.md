@@ -1,5 +1,12 @@
 # QA Test Report - MTPDFLogo
 
+Latest installer delivery (2026-09-06): `releases/MTPDFLogo-installer.zip`, built from application
+commit `80fce0f`, passed build gates (150 tests, coverage 80.64%), then 3 fresh-install smoke tests
+and installed-package offscreen UI startup. SHA256:
+`6D7CAFAC65775D130E7E305B83367176DFE936947AA0BA5E8AD49B6129903B83`.
+See `releases/README.md` for installation instructions and current artifact evidence.
+The sections below retain the preceding source-slice/release history.
+
 วันที่ทดสอบ: 2026-09-06 (Batch lifecycle guards และ grid progress bar)
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
