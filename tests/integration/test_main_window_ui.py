@@ -65,8 +65,8 @@ def test_preview_canvas_is_large_and_resizable(qtbot) -> None:
     assert workspace_splitter is not None
     assert canvas_splitter.orientation() == Qt.Orientation.Horizontal
     assert workspace_splitter.orientation() == Qt.Orientation.Vertical
-    assert canvas_splitter.handleWidth() >= 12
-    assert workspace_splitter.handleWidth() >= 12
+    assert 6 <= canvas_splitter.handleWidth() <= 10
+    assert 6 <= workspace_splitter.handleWidth() <= 10
     assert canvas_splitter.opaqueResize()
     assert workspace_splitter.opaqueResize()
     assert not canvas_splitter.childrenCollapsible()

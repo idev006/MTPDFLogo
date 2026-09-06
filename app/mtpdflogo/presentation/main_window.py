@@ -511,16 +511,17 @@ class MainWindow(QMainWindow):
     def _make_splitter_discoverable(splitter: QSplitter) -> None:
         """Make resizable panes discoverable without replacing the OS theme."""
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(12)
+        splitter.setHandleWidth(8)
         splitter.setOpaqueResize(True)
         splitter.setStyleSheet(
             """
             QSplitter::handle {
-                background-color: palette(midlight);
-                border: 1px solid palette(mid);
+                background-color: transparent;
+                border: 1px solid palette(midlight);
             }
             QSplitter::handle:hover {
-                background-color: palette(highlight);
+                background-color: palette(midlight);
+                border-color: palette(highlight);
             }
             """
         )
