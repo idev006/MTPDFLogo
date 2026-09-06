@@ -79,6 +79,7 @@
 - UI ต้องมี `About Dev` เพื่อให้เครดิต `Developer: Masteriii (MT)` โดยไม่ใส่ข้อมูลส่วนตัว/ข้อมูลระบุตัวตนเกินจำเป็น
 - UI สำหรับงานจำนวนมากต้องเน้น scan ได้เร็ว, spacing สม่ำเสมอ, และสถานะสำคัญต้องมองเห็นทันที
 - Layout หลักต้องให้ Preview เป็นพื้นที่ทำงานหลักโดย default เพราะผู้ใช้ต้องตรวจตำแหน่ง/ขนาด/หมุน/opacity จากภาพเอกสารจริง
+- Preview ต้องอยู่ใน resizable splitter ระหว่าง Overlay Items และ Properties โดยให้ Preview ได้สัดส่วนเริ่มต้นใหญ่ที่สุด และผู้ใช้ต้องลากปรับ panel ซ้าย/ขวา/ล่างได้เอง
 - Settings ของ Text/Logo ต้องบันทึก/โหลดเป็น preset ได้ เพื่อรองรับ process ซ้ำและลด human error
 
 ## Batch contract

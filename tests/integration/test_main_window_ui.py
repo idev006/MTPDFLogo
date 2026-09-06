@@ -51,6 +51,31 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
     assert window.pipeline_summary.text() == "รอเลือกไฟล์"
 
 
+def test_preview_canvas_is_large_and_resizable(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1800, 1000)
+    window.show()
+    qtbot.waitExposed(window)
+
+    canvas_splitter = window.findChild(QSplitter, "canvasSplitter")
+    workspace_splitter = window.findChild(QSplitter, "workspaceSplitter")
+
+    assert canvas_splitter is not None
+    assert workspace_splitter is not None
+    assert canvas_splitter.orientation() == Qt.Orientation.Horizontal
+    assert workspace_splitter.orientation() == Qt.Orientation.Vertical
+    assert canvas_splitter.handleWidth() >= 8
+    assert workspace_splitter.handleWidth() >= 8
+    assert not canvas_splitter.childrenCollapsible()
+    assert not workspace_splitter.childrenCollapsible()
+    assert window.preview.minimumWidth() >= 620
+    assert window.preview.minimumHeight() >= 380
+    assert canvas_splitter.sizes()[1] > canvas_splitter.sizes()[0]
+    assert canvas_splitter.sizes()[1] > canvas_splitter.sizes()[2]
+    assert workspace_splitter.sizes()[0] > workspace_splitter.sizes()[1]
+
+
 def test_about_dev_content_is_present_and_privacy_safe(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)

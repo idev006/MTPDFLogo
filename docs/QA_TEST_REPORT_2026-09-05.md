@@ -1,13 +1,13 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-05 10:48 +07:00
+วันที่ทดสอบ: 2026-09-06 10:15 +07:00
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
 Artifact SHA256: 4D3EE35DCE369839C74DD9CA26C10EFDF8FA0DF3675999489ED0AD71F3A0C1D9
 
-หมายเหตุ slice ล่าสุด: การปรับ Batch Workspace เป็น 2 panel ซ้าย-ขวา และการจำกัด Search occurrence range slider เป็น 0-100 เป็น source-only UI refactor
+หมายเหตุ slice ล่าสุด: การปรับ Batch Workspace เป็น 2 panel ซ้าย-ขวา, การจำกัด Search occurrence range slider เป็น 0-100, และการทำให้ Preview canvas ใหญ่ขึ้นพร้อม resizable splitters เป็น source-only UI refactor
 ตามคำสั่งผู้ใช้ว่า “ยังไม่ต้องทำตัว install”; artifact hash ด้านบนจึงเป็น installer zip จาก release gate ก่อนหน้า
 ไม่ใช่ zip ที่ rebuild จาก source commit ล่าสุด
 
@@ -27,8 +27,8 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 141 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 79.39% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 142 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 79.46% >= 75% |
 | Build source installer zip | `build.bat` | Passed |
 | Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
 | Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
