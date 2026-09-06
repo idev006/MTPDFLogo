@@ -67,9 +67,9 @@
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
 - Numeric controls ใน Batch Workspace เช่น depth และ workers ต้องมี slider สำหรับปรับเร็ว และยังคง spinbox สำหรับค่าที่ต้องการความแม่นยำ
 - Search occurrence thresholds ต้องใช้ range slider เดียวสำหรับกำหนดช่วงอย่างน้อย/ไม่เกินในช่วง 0-100 เพื่อป้องกัน min มากกว่า max และยังคง spinbox คู่ไว้สำหรับกรอกเลขตรง ๆ
-- Batch Queue ต้องจัดเป็น Batch Workspace แบบ 2 panel ซ้าย-ขวา: ฝั่งซ้ายเป็น Settings Tabs และฝั่งขวาเป็น Queue Monitor
-- Settings Tabs ฝั่งซ้ายต้องแบ่งตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing
-- Queue Monitor ฝั่งขวาต้องแสดง queue actions, summary, overall progress และ queue table โดยไม่ถูก settings controls บีบพื้นที่
+- Batch Queue ต้องจัดเป็น Batch Workspace แบบ tab ชั้นนอก: `ตั้งค่างาน` และ `Queue Monitor` เพื่อไม่ให้ settings form กับ queue table บีบพื้นที่กัน
+- Settings Tabs ใน tab `ตั้งค่างาน` ต้องแบ่งตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing
+- Queue Monitor ต้องแสดง queue actions, summary, overall progress และ queue table เต็มความกว้างของ Batch Workspace โดยไม่ถูก settings controls บีบพื้นที่
 - Batch Workspace tabs หรือ panels ที่มี controls จำนวนมากต้อง scroll ได้เฉพาะภายในพื้นที่นั้น ห้ามทำให้ทั้งหน้าจอ desktop scroll แบบ browser
 - Batch Workspace ต้องมี summary จำนวนไฟล์และ readiness เพื่อให้ผู้ใช้ไม่ต้องอ่านสถานะจากตารางอย่างเดียว
 - Batch Workspace ต้องมี overall progress bar เพื่อให้ผู้ใช้เห็น progress รวมของ queue โดยไม่ต้องอ่านทีละ row

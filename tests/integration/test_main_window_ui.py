@@ -185,19 +185,20 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     qtbot.addWidget(window)
     groups = {group.title() for group in window.findChildren(QGroupBox)}
     workspace = window.findChild(QSplitter, "workspaceSplitter")
-    batch_workspace = window.findChild(QSplitter, "batchWorkspaceSplitter")
+    batch_workspace = window.findChild(QTabWidget, "batchWorkspaceTopTabs")
 
     assert {"Input — ไฟล์ต้นทาง", "Output — โฟลเดอร์ปลายทาง", "Options — การประมวลผล"}.issubset(groups)
     assert workspace is not None
     assert not workspace.childrenCollapsible()
     assert batch_workspace is not None
     assert batch_workspace.count() == 2
-    assert not batch_workspace.childrenCollapsible()
+    assert batch_workspace.tabText(0) == "ตั้งค่างาน"
+    assert batch_workspace.tabText(1) == "Queue Monitor"
     assert window.batch_tabs.count() == 3
     assert window.batch_tabs.tabText(0) == "ไฟล์และปลายทาง"
     assert window.batch_tabs.tabText(1) == "Search / ช่วงหน้า"
     assert window.batch_tabs.tabText(2) == "Processing"
-    assert window.queue_table.minimumHeight() >= 260
+    assert window.queue_table.minimumHeight() >= 320
     assert window.batch_input_folder.minimumWidth() >= 280
     assert window.batch_output_folder.minimumWidth() >= 280
     assert window.queue_summary.text() == "ยังไม่มีไฟล์ใน queue"
@@ -219,6 +220,26 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     assert window.queue_table.horizontalHeaderItem(2).text() == "Pages/Items"
     assert window.queue_table.horizontalHeaderItem(3).text() == "Output File"
     assert window.queue_table.columnWidth(6) >= 200
+
+
+def test_queue_monitor_tab_shows_file_count(qtbot, tmp_path) -> None:
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    first.write_bytes(b"%PDF-1.7\n")
+    second.write_bytes(b"%PDF-1.7\n")
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._populate_queue(
+        [
+            (first, tmp_path / "out" / "first-watermask.pdf"),
+            (second, tmp_path / "out" / "second-watermask.pdf"),
+        ]
+    )
+
+    batch_workspace = window.findChild(QTabWidget, "batchWorkspaceTopTabs")
+    assert batch_workspace is not None
+    assert batch_workspace.tabText(1) == "Queue Monitor (2)"
 
 
 def test_numeric_sliders_stay_synced_with_spin_boxes(qtbot) -> None:

@@ -479,6 +479,9 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "queue_summary"):
             return
         total = self.queue_table.rowCount()
+        if hasattr(self, "batch_workspace_tabs"):
+            queue_tab_label = "Queue Monitor" if total == 0 else f"Queue Monitor ({total})"
+            self.batch_workspace_tabs.setTabText(1, queue_tab_label)
         if total == 0:
             self.queue_summary.setText("ยังไม่มีไฟล์ใน queue")
             return
@@ -516,14 +519,9 @@ class MainWindow(QMainWindow):
         header.addStretch()
         layout.addLayout(header)
 
-        self.batch_workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.batch_workspace_splitter.setObjectName("batchWorkspaceSplitter")
-        self.batch_workspace_splitter.setChildrenCollapsible(False)
-
         settings_panel = QWidget()
-        settings_panel.setMinimumWidth(420)
         settings_layout = QVBoxLayout(settings_panel)
-        settings_layout.setContentsMargins(0, 0, 8, 0)
+        settings_layout.setContentsMargins(8, 8, 8, 8)
         settings_layout.setSpacing(6)
         settings_title = QLabel("ตั้งค่างาน")
         settings_title.setObjectName("sectionTitle")
@@ -534,12 +532,10 @@ class MainWindow(QMainWindow):
         self.batch_tabs.addTab(self._build_search_tab(), "Search / ช่วงหน้า")
         self.batch_tabs.addTab(self._build_processing_tab(), "Processing")
         settings_layout.addWidget(self.batch_tabs, 1)
-        self.batch_workspace_splitter.addWidget(settings_panel)
 
         queue_panel = QWidget()
-        queue_panel.setMinimumWidth(680)
         queue_layout = QVBoxLayout(queue_panel)
-        queue_layout.setContentsMargins(8, 0, 0, 0)
+        queue_layout.setContentsMargins(8, 8, 8, 8)
         queue_layout.setSpacing(6)
         queue_header = QHBoxLayout()
         queue_title = QLabel("Queue Monitor")
@@ -574,7 +570,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
-        self.queue_table.setMinimumHeight(260)
+        self.queue_table.setMinimumHeight(320)
         self.queue_table.doubleClicked.connect(lambda _index: self._show_selected_queue_error())
         header_view = self.queue_table.horizontalHeader()
         header_view.setStretchLastSection(False)
@@ -591,11 +587,12 @@ class MainWindow(QMainWindow):
         self.queue_table.setColumnWidth(5, 125)
         self.queue_table.setColumnWidth(6, 220)
         queue_layout.addWidget(self.queue_table, 1)
-        self.batch_workspace_splitter.addWidget(queue_panel)
-        self.batch_workspace_splitter.setStretchFactor(0, 2)
-        self.batch_workspace_splitter.setStretchFactor(1, 3)
-        self.batch_workspace_splitter.setSizes([520, 880])
-        layout.addWidget(self.batch_workspace_splitter, 1)
+
+        self.batch_workspace_tabs = QTabWidget()
+        self.batch_workspace_tabs.setObjectName("batchWorkspaceTopTabs")
+        self.batch_workspace_tabs.addTab(settings_panel, "ตั้งค่างาน")
+        self.batch_workspace_tabs.addTab(queue_panel, "Queue Monitor")
+        layout.addWidget(self.batch_workspace_tabs, 1)
         return panel
 
     def _build_file_output_tab(self) -> QWidget:
