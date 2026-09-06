@@ -61,19 +61,20 @@
 - การเลือกไฟล์และการเลือก Output Folder ต้องเป็นคนละ control ชัดเจน
 - ปุ่มเลือกไฟล์ต้องมีปุ่มเดียว: `เลือกไฟล์`
 - Queue table เป็น control หลักของ batch และต้องแสดง input, page count, output, progress, status, error ต่อไฟล์
-- Queue table ต้องมีพื้นที่แนวตั้งมากพอสำหรับงานหลายไฟล์ โดย default ต้องสูงอย่างน้อยระดับใช้งานจริง ไม่ถูกบีบจนอ่านไม่ได้ และผู้ใช้ต้องลาก splitter เพื่อปรับสัดส่วน preview/queue ได้
+- Preview และ Queue อยู่คนละแท็บหลักและใช้พื้นที่แนวตั้งเต็มแท็บ ผู้ใช้ลาก splitter ปรับสัดส่วน panel ภายในแต่ละแท็บได้
 - Queue table ต้องแสดง error ต่อรายการและมีทางให้ผู้ใช้เปิดรายละเอียด error แบบคัดลอกไปส่งต่อ/ตรวจสอบได้
 - Batch Queue ต้องมี controls สำหรับ Input Folder, recursive, depth limit, และ preserve folder structure
 - Batch Queue ต้องมี control `Workers` สำหรับจำนวนไฟล์ที่จะประมวลผลพร้อมกัน
 - Numeric controls ใน Batch Workspace เช่น depth และ workers ต้องมี slider สำหรับปรับเร็ว และยังคง spinbox สำหรับค่าที่ต้องการความแม่นยำ
 - Search occurrence thresholds ต้องใช้ range slider เดียวสำหรับกำหนดช่วงอย่างน้อย/ไม่เกินในช่วง 0-100 เพื่อป้องกัน min มากกว่า max และยังคง spinbox คู่ไว้สำหรับกรอกเลขตรง ๆ
-- Batch Queue ต้องจัดเป็น Batch Workspace แบบ tab ชั้นนอก: `ตั้งค่างาน` และ `Queue Monitor` เพื่อไม่ให้ settings form กับ queue table บีบพื้นที่กัน
-- Settings Tabs ใน tab `ตั้งค่างาน` ต้องแบ่งตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing
-- Queue Monitor ต้องแสดง queue actions, summary, overall progress และ queue table เต็มความกว้างของ Batch Workspace โดยไม่ถูก settings controls บีบพื้นที่
+- หน้าหลักแบ่ง 3 แท็บ: `ออกแบบลายน้ำ`, `ไฟล์และการประมวลผล`, `ผลลัพธ์`
+- แท็บไฟล์และการประมวลผลมี horizontal splitter: settings ด้านซ้ายและ queue ด้านขวา เริ่มต้นให้คิวได้พื้นที่มากกว่า
+- Settings Tabs แบ่งตามงานผู้ใช้: ไฟล์และปลายทาง, Search/ช่วงหน้า, Processing
+- Queue แสดง actions, summary, overall progress และตารางที่เลื่อนเอง โดยมีปุ่มเริ่ม/หยุดกับเหตุผล readiness อยู่ใต้ splitter ตลอด
 - Batch Workspace tabs หรือ panels ที่มี controls จำนวนมากต้อง scroll ได้เฉพาะภายในพื้นที่นั้น ห้ามทำให้ทั้งหน้าจอ desktop scroll แบบ browser
-- Tab `ตั้งค่างาน` ต้องมี vertical scroll เฉพาะ settings content/sub-tabs เมื่อพื้นที่ไม่พอ เพื่อรองรับจอเตี้ยและ Windows display scaling โดยไม่ดัน Preview/Queue ออกจากหน้าจอ และไม่แสดง scrollbar ถ้าเนื้อหาไม่ล้น
+- Settings ต้องมี vertical scroll เฉพาะเนื้อหาเมื่อพื้นที่ไม่พอ เพื่อรองรับจอเตี้ยและ Windows display scaling โดยไม่ดัน Preview/Queue ออกจากหน้าจอ และไม่แสดง scrollbar ถ้าเนื้อหาไม่ล้น
 - Settings content ใน scroll area ต้องไม่ถูก squeeze ต่ำกว่า layout `sizeHint`; ถ้าพื้นที่ไม่พอต้อง scroll ไม่ใช่ clip ด้านล่างของ controls
-- Tab `Queue Monitor` ต้องให้ QTableWidget เป็นเจ้าของ vertical/horizontal scrolling เอง โดย header/actions/summary/progress ยังอยู่ด้านบน ไม่ใส่ scroll ซ้อนทั้ง panel
+- Queue ต้องให้ QTableWidget เป็นเจ้าของ vertical/horizontal scrolling เอง โดย header/actions/summary/progress ยังอยู่ด้านบน ไม่ใส่ scroll ซ้อนทั้ง panel และไม่บีบคอลัมน์ชื่อไฟล์จนอ่านไม่ได้
 - Batch Workspace ต้องมี summary จำนวนไฟล์และ readiness เพื่อให้ผู้ใช้ไม่ต้องอ่านสถานะจากตารางอย่างเดียว
 - Batch Workspace ต้องมี overall progress bar เพื่อให้ผู้ใช้เห็น progress รวมของ queue โดยไม่ต้องอ่านทีละ row
 - ข้อความใน UI ต้องเป็น action-oriented: ชื่อ control ต้องบอกสิ่งที่จะเกิดขึ้นเมื่อผู้ใช้กด
@@ -82,7 +83,9 @@
 - UI ต้องมี `About Dev` เพื่อให้เครดิต `Developer: Masteriii (MT)` โดยไม่ใส่ข้อมูลส่วนตัว/ข้อมูลระบุตัวตนเกินจำเป็น
 - UI สำหรับงานจำนวนมากต้องเน้น scan ได้เร็ว, spacing สม่ำเสมอ, และสถานะสำคัญต้องมองเห็นทันที
 - Layout หลักต้องให้ Preview เป็นพื้นที่ทำงานหลักโดย default เพราะผู้ใช้ต้องตรวจตำแหน่ง/ขนาด/หมุน/opacity จากภาพเอกสารจริง
-- Preview ต้องอยู่ใน resizable splitter ระหว่าง Overlay Items และ Properties โดยให้ Preview ได้สัดส่วนเริ่มต้นใหญ่ที่สุด และผู้ใช้ต้องลากปรับ panel ซ้าย/ขวา/ล่างได้เอง
+- Preview อยู่ใน horizontal splitter ระหว่าง Overlay Items และ Properties ให้ Preview ได้สัดส่วนเริ่มต้นใหญ่ที่สุด มีคำสั่งซ่อน/แสดง panel ข้างและคืนค่าเค้าโครง
+- สัดส่วน splitter และ geometry บันทึกใน `[layout]` ของ preferences.toml; restore ต้องปรับหน้าต่างให้อยู่ในพื้นที่จอ
+- แท็บผลลัพธ์เก็บ snapshot รอบล่าสุดแยกจากคิว จึงยังตรวจผลได้หลังล้างคิว มีคำสั่งเปิดไฟล์/โฟลเดอร์ ดู error และลองใหม่เฉพาะ Failed ผ่าน preflight เดิม
 - Splitter handles ต้องมองเห็น/จับลากง่าย มี cursor และ tooltip ที่สื่อว่า resize panel ได้ แต่ visual ต้องบางและไม่เด่นจนแย่งความสนใจจาก preview
 - Settings ของ Text/Logo ต้องบันทึก/โหลดเป็น preset ได้ เพื่อรองรับ process ซ้ำและลด human error
 

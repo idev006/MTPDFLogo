@@ -20,6 +20,7 @@ class UserPreferences:
     default_settings_file: Path | None = None
     recent_settings_files: list[Path] = field(default_factory=list)
     open_output_folder_on_finish: bool = False
+    layout: dict[str, str] = field(default_factory=dict)
 
     def remember_settings_file(self, path: Path) -> None:
         resolved = path.resolve()
@@ -64,6 +65,8 @@ def load_preferences(path: Path | None = None) -> UserPreferences:
         open_output_folder_on_finish=bool(
             behavior.get("open_output_folder_on_finish", False)
         ),
+        layout={key: value for key, value in data.get("layout", {}).items()
+                if key in {"geometry", "canvas", "batch"} and isinstance(value, str)},
     )
 
 
@@ -99,5 +102,9 @@ def save_preferences(preferences: UserPreferences, path: Path | None = None) -> 
             "\n[behavior]\n"
             "open_output_folder_on_finish = "
             f"{str(preferences.open_output_folder_on_finish).lower()}\n"
+            "\n[layout]\n"
+            + "".join(f"{key} = {json.dumps(value)}\n"
+                      for key, value in preferences.layout.items()
+                      if key in {"geometry", "canvas", "batch"})
         )
     temporary_path.replace(path)

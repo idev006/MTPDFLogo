@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from time import monotonic
 from typing import Any
+from uuid import uuid4
 
 import fitz
-from PySide6.QtCore import QRect, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QByteArray, QRect, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -56,6 +58,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -278,6 +281,10 @@ class PreviewGraphicsView(QGraphicsView):
             return
         super().wheelEvent(event)
 
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self.owner._apply_preview_zoom)
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -294,6 +301,7 @@ class MainWindow(QMainWindow):
         self._overlays: list[dict[str, Any]] = []
         self._pending_batch_jobs: list[tuple[Path, Path]] = []
         self._last_export_jobs: list[tuple[Path, Path]] = []
+        self._export_started_at: float | None = None
         self._batch_readiness_reason = "missing_jobs"
         self._preview_bakes_overlays = True
         self._preview_zoom = 1.0
@@ -377,25 +385,61 @@ class MainWindow(QMainWindow):
         self.canvas_splitter.setStretchFactor(2, 0)
         self.canvas_splitter.setSizes([260, 1080, 320])
         self._make_splitter_discoverable(self.canvas_splitter)
-        self.workspace_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.workspace_splitter.setObjectName("workspaceSplitter")
-        self.workspace_splitter.addWidget(self.canvas_splitter)
-        self.workspace_splitter.addWidget(self._build_queue_panel())
-        self.workspace_splitter.setStretchFactor(0, 5)
-        self.workspace_splitter.setStretchFactor(1, 2)
-        self.workspace_splitter.setSizes([720, 260])
-        self._make_splitter_discoverable(self.workspace_splitter)
+        self.canvas_splitter.setCollapsible(0, True)
+        self.canvas_splitter.setCollapsible(2, True)
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setObjectName("mainWorkspaceTabs")
+        self.main_tabs.addTab(self.canvas_splitter, "ออกแบบลายน้ำ")
+        self.main_tabs.addTab(self._build_queue_panel(), "ไฟล์และการประมวลผล")
+        self.main_tabs.addTab(self._build_results_panel(), "ผลลัพธ์")
+        self.main_tabs.currentChanged.connect(lambda _index: self._apply_preview_zoom())
+        view_menu = self.menuBar().addMenu("มุมมอง")
+        view_menu.addAction("แสดง/ซ่อนรายการลายน้ำ", lambda: self._toggle_canvas_panel(0))
+        view_menu.addAction("แสดง/ซ่อนคุณสมบัติ", lambda: self._toggle_canvas_panel(2))
+        view_menu.addAction("คืนค่าเค้าโครง", self._reset_layout)
+        settings_menu = self.menuBar().addMenu("การตั้งค่า")
+        # Keep frequent actions readable; less frequent actions remain in the menu.
+        for toolbar_action in list(toolbar.actions()):
+            if toolbar_action.text() in {
+                "เพิ่ม Text", "เพิ่ม Logo", "เพิ่ม Text+Logo", "บันทึก Default",
+                "โหลด Default", "Export ไฟล์ปัจจุบัน", "เลือกโฟลเดอร์ต้นทาง",
+            }:
+                settings_menu.addAction(toolbar_action)
+                toolbar.removeAction(toolbar_action)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(10, 8, 10, 10)
         central_layout.setSpacing(8)
         central_layout.addWidget(self._build_pipeline_panel())
-        central_layout.addWidget(self.workspace_splitter, 1)
+        central_layout.addWidget(self.main_tabs, 1)
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage(
             "พร้อมใช้งาน — เลือก PDF/Image File(s) เพื่อเริ่ม; ลากเส้นแบ่งเพื่อปรับขนาด panel"
         )
+        for key, splitter in (("canvas", self.canvas_splitter), ("batch", self.batch_splitter)):
+            state = self._preferences.layout.get(key)
+            if state:
+                splitter.restoreState(QByteArray.fromHex(state.encode("ascii", errors="ignore")))
+        geometry = self._preferences.layout.get("geometry")
+        if geometry:
+            self.restoreGeometry(QByteArray.fromHex(geometry.encode("ascii", errors="ignore")))
+        available = self.screen().availableGeometry()
+        self.resize(min(self.width(), available.width()), min(self.height(), available.height()))
+        if not available.contains(self.frameGeometry().center()):
+            self.move(available.topLeft())
+
+    def _toggle_canvas_panel(self, index: int) -> None:
+        panel = self.canvas_splitter.widget(index)
+        panel.setVisible(panel.isHidden())
+
+    def _reset_layout(self) -> None:
+        for index in (0, 2):
+            self.canvas_splitter.widget(index).show()
+        self.canvas_splitter.setSizes([240, 950, 320])
+        self.batch_splitter.setSizes([420, 1000])
+        self._fit_preview()
 
     def _build_pipeline_panel(self) -> QWidget:
         panel = QFrame()
@@ -480,9 +524,17 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "queue_summary"):
             return
         total = self.queue_table.rowCount()
-        if hasattr(self, "batch_workspace_tabs"):
-            queue_tab_label = "Queue Monitor" if total == 0 else f"Queue Monitor ({total})"
-            self.batch_workspace_tabs.setTabText(1, queue_tab_label)
+        if hasattr(self, "main_tabs") and self.main_tabs.count() > 1:
+            self.main_tabs.setTabText(1, f"ไฟล์และการประมวลผล ({total})")
+        if hasattr(self, "preview_file"):
+            previous = self.preview_file.currentData()
+            self.preview_file.blockSignals(True)
+            self.preview_file.clear()
+            for source in self._queue_sources():
+                self.preview_file.addItem(source.name, str(source))
+            index = self.preview_file.findData(previous)
+            self.preview_file.setCurrentIndex(max(0, index))
+            self.preview_file.blockSignals(False)
         if total == 0:
             self.queue_summary.setText("ยังไม่มีไฟล์ใน queue")
             return
@@ -538,7 +590,7 @@ class MainWindow(QMainWindow):
 
     def _build_queue_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumHeight(360)
+        panel.setMinimumHeight(280)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -600,7 +652,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
-        self.queue_table.setMinimumHeight(320)
+        self.queue_table.setMinimumHeight(200)
         self.queue_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.queue_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -609,25 +661,120 @@ class MainWindow(QMainWindow):
         header_view = self.queue_table.horizontalHeader()
         header_view.setStretchLastSection(False)
         header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
         header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)
         self.queue_table.setColumnWidth(0, 52)
+        self.queue_table.setColumnWidth(1, 220)
+        self.queue_table.setColumnWidth(3, 260)
         self.queue_table.setColumnWidth(2, 96)
         self.queue_table.setColumnWidth(4, 110)
         self.queue_table.setColumnWidth(5, 125)
         self.queue_table.setColumnWidth(6, 220)
         queue_layout.addWidget(self.queue_table, 1)
 
-        self.batch_workspace_tabs = QTabWidget()
-        self.batch_workspace_tabs.setObjectName("batchWorkspaceTopTabs")
-        self.batch_workspace_tabs.addTab(settings_panel, "ตั้งค่างาน")
-        self.batch_workspace_tabs.addTab(queue_panel, "Queue Monitor")
-        layout.addWidget(self.batch_workspace_tabs, 1)
+        self.batch_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.batch_splitter.setObjectName("batchSplitter")
+        self.batch_splitter.addWidget(settings_panel)
+        self.batch_splitter.addWidget(queue_panel)
+        self.batch_splitter.setStretchFactor(0, 0)
+        self.batch_splitter.setStretchFactor(1, 1)
+        self.batch_splitter.setSizes([420, 1000])
+        self._make_splitter_discoverable(self.batch_splitter)
+        layout.addWidget(self.batch_splitter, 1)
+        footer = QHBoxLayout()
+        self.readiness_label = QLabel()
+        self.readiness_label.setWordWrap(True)
+        footer.addWidget(self.readiness_label, 1)
+        for action in (self.start_batch_action, self.cancel_action):
+            button = QToolButton()
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setDefaultAction(action)
+            footer.addWidget(button)
+        self.start_batch_action.changed.connect(
+            lambda: self.readiness_label.setText(self.start_batch_action.toolTip())
+        )
+        self.readiness_label.setText(self.start_batch_action.toolTip())
+        layout.addLayout(footer)
         return panel
+
+    def _build_results_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        self.results_summary = QLabel("ยังไม่มีผลลัพธ์ — เริ่มประมวลผลจากแท็บไฟล์และการประมวลผล")
+        self.results_summary.setWordWrap(True)
+        layout.addWidget(self.results_summary)
+        self.results_table = QTableWidget(0, 3)
+        self.results_table.setHorizontalHeaderLabels(["ไฟล์ผลลัพธ์", "สถานะ", "รายละเอียด"])
+        self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.results_table, 1)
+        buttons = QHBoxLayout()
+        for title, callback in (
+            ("เปิดไฟล์", lambda: self._open_result(False)),
+            ("เปิดโฟลเดอร์", lambda: self._open_result(True)),
+            ("ดูข้อผิดพลาด", self._show_result_error),
+            ("ลองใหม่เฉพาะรายการที่ล้มเหลว", self._retry_failed_results),
+        ):
+            button = QPushButton(title)
+            button.clicked.connect(callback)
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+        return panel
+
+    def _capture_results(self, message: str) -> None:
+        elapsed = monotonic() - self._export_started_at if self._export_started_at else 0
+        self.results_summary.setText(f"{message} • เวลา {elapsed:.1f} วินาที")
+        self.results_table.setRowCount(len(self._last_export_jobs))
+        for index, (source, destination) in enumerate(self._last_export_jobs):
+            row = self._queue_row_for_source(str(source))
+            status = self.queue_table.item(row, 5).text() if row is not None else "Unknown"
+            error = self.queue_table.item(row, 6).text() if row is not None else ""
+            for column, value in enumerate((str(destination), status, error)):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setData(Qt.ItemDataRole.UserRole, str(source))
+                self.results_table.setItem(index, column, item)
+
+    def _open_result(self, folder: bool) -> None:
+        row = self.results_table.currentRow()
+        if row < 0:
+            return
+        path = Path(self.results_table.item(row, 0).text())
+        if folder:
+            path = path.parent
+        if path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        else:
+            self.statusBar().showMessage("ไม่พบไฟล์ผลลัพธ์หรือโฟลเดอร์นี้")
+
+    def _show_result_error(self) -> None:
+        row = self.results_table.currentRow()
+        if row >= 0:
+            QMessageBox.information(
+                self, "รายละเอียดผลลัพธ์",
+                self.results_table.item(row, 2).text() or "ไม่มีข้อผิดพลาด",
+            )
+
+    def _retry_failed_results(self) -> None:
+        if self._thread is not None:
+            return
+        jobs = [
+            (Path(self.results_table.item(row, 0).data(Qt.ItemDataRole.UserRole)),
+             Path(self.results_table.item(row, 0).text()))
+            for row in range(self.results_table.rowCount())
+            if self.results_table.item(row, 1).text() == "Failed"
+        ]
+        if jobs:
+            self._populate_queue(jobs)
+            self._refresh_batch_readiness()
+            self.main_tabs.setCurrentIndex(1)
+            self._start_export(jobs)
 
     def _build_file_output_tab(self) -> QWidget:
         container = QWidget()
@@ -635,8 +782,7 @@ class MainWindow(QMainWindow):
         container_layout.setContentsMargins(8, 8, 8, 8)
         container_layout.setSpacing(8)
         input_group = QGroupBox("Input — ไฟล์ต้นทาง")
-        input_row = QHBoxLayout(input_group)
-        input_row.addWidget(QLabel("Folder:"))
+        input_row = QVBoxLayout(input_group)
         self.batch_input_folder = QLineEdit()
         self.batch_input_folder.setMinimumWidth(280)
         self.batch_input_folder.setPlaceholderText("เลือกหรือวาง Folder ต้นทาง")
@@ -644,13 +790,14 @@ class MainWindow(QMainWindow):
         browse_input.clicked.connect(self._choose_batch_input_folder)
         load_folder = QPushButton("โหลดจาก Folder")
         load_folder.clicked.connect(self._load_input_folder_files)
-        input_row.addWidget(self.batch_input_folder, 1)
-        input_row.addWidget(browse_input)
-        input_row.addWidget(load_folder)
+        input_row.addWidget(self.batch_input_folder)
+        input_buttons = QHBoxLayout()
+        input_buttons.addWidget(browse_input)
+        input_buttons.addWidget(load_folder)
+        input_row.addLayout(input_buttons)
         container_layout.addWidget(input_group)
         output_group = QGroupBox("Output — โฟลเดอร์ปลายทาง")
-        output_row = QHBoxLayout(output_group)
-        output_row.addWidget(QLabel("Folder:"))
+        output_row = QVBoxLayout(output_group)
         self.batch_output_folder = QLineEdit(
             str(self._preferences.output_folder) if self._preferences.output_folder else ""
         )
@@ -661,14 +808,16 @@ class MainWindow(QMainWindow):
         browse_output.clicked.connect(self._choose_batch_output)
         self.open_output_folder_button = QPushButton("เปิด Folder")
         self.open_output_folder_button.clicked.connect(self._open_output_folder_manual)
-        output_row.addWidget(self.batch_output_folder, 1)
-        output_row.addWidget(browse_output)
-        output_row.addWidget(self.open_output_folder_button)
+        output_row.addWidget(self.batch_output_folder)
+        output_buttons = QHBoxLayout()
+        output_buttons.addWidget(browse_output)
+        output_buttons.addWidget(self.open_output_folder_button)
+        output_row.addLayout(output_buttons)
         self._update_output_folder_button()
         container_layout.addWidget(output_group)
 
         folder_options = QGroupBox("Folder Options — เมื่อโหลดจากโฟลเดอร์")
-        folder_row = QHBoxLayout(folder_options)
+        folder_row = QVBoxLayout(folder_options)
         self.recursive_input = QCheckBox("Recursive")
         self.recursive_input.setChecked(True)
         self.recursive_input.toggled.connect(self._recursive_toggled)
@@ -688,10 +837,13 @@ class MainWindow(QMainWindow):
         self.preserve_structure.setChecked(self._config.preserve_subfolders)
         self.preserve_structure.toggled.connect(self._batch_output_text_changed)
         folder_row.addWidget(self.recursive_input)
-        folder_row.addWidget(QLabel("ลึกไม่เกิน"))
-        folder_row.addWidget(self.max_depth_slider, 1)
-        folder_row.addWidget(self.max_depth)
-        folder_row.addWidget(QLabel("ชั้น"))
+        depth_row = QHBoxLayout()
+        depth_row.addWidget(QLabel("ลึกไม่เกิน"))
+        depth_row.addWidget(self.max_depth_slider, 1)
+        self.max_depth.setMaximumWidth(70)
+        depth_row.addWidget(self.max_depth)
+        depth_row.addWidget(QLabel("ชั้น"))
+        folder_row.addLayout(depth_row)
         folder_row.addWidget(self.preserve_structure)
         folder_row.addStretch()
         container_layout.addWidget(folder_options)
@@ -704,7 +856,7 @@ class MainWindow(QMainWindow):
         options_layout.setSpacing(8)
         search_group = QGroupBox("Search / Page Filter — เลือกหน้าเป้าหมาย")
         search_layout = QVBoxLayout(search_group)
-        first_row = QHBoxLayout()
+        first_row = QVBoxLayout()
         self.page_filter_enabled = QCheckBox("วางเฉพาะหน้าที่พบคำนี้")
         self.page_filter_enabled.setToolTip(
             "ใช้ text layer ของ PDF ไม่ใช่ OCR; ถ้า PDF เป็นสแกนล้วนอาจค้นไม่พบ"
@@ -790,7 +942,7 @@ class MainWindow(QMainWindow):
         setup_row.setSpacing(10)
         options_group = QGroupBox("Options — การประมวลผล")
         options_layout = QVBoxLayout(options_group)
-        options_row = QHBoxLayout()
+        options_row = QVBoxLayout()
         self.worker_count = QSpinBox()
         self.worker_count.setRange(1, self._max_worker_limit())
         self.worker_count.setValue(min(self._config.max_workers, self._max_worker_limit()))
@@ -840,7 +992,7 @@ class MainWindow(QMainWindow):
 
     def _build_overlay_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(220)
+        panel.setMinimumWidth(180)
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         title = QLabel("OVERLAY ITEMS")
@@ -862,21 +1014,39 @@ class MainWindow(QMainWindow):
         both_button.clicked.connect(self._add_text_and_logo)
         buttons.addWidget(text_button)
         buttons.addWidget(logo_button)
-        buttons.addWidget(both_button)
         layout.addLayout(buttons)
+        layout.addWidget(both_button)
+        duplicate = QPushButton("ทำสำเนารายการที่เลือก")
+        duplicate.clicked.connect(self._duplicate_overlay)
+        layout.addWidget(duplicate)
         return panel
+
+    def _duplicate_overlay(self) -> None:
+        item = self._selected_model()
+        if item is not None:
+            copied = dict(item, id=f"overlay-{uuid4().hex}")
+            self._overlays.append(copied)
+            self._rebuild_overlay_list()
+            self._select_overlay_by_id(copied["id"])
+            self._refresh_batch_readiness()
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumSize(640, 420)
+        panel.setMinimumSize(360, 300)
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         header = QHBoxLayout()
         self.preview_title = QLabel("PDF Preview")
+        self.preview_title.setMinimumWidth(0)
+        self.preview_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.page_label = QLabel("หน้า 0 / 0")
-        header.addWidget(self.preview_title)
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.preview_title, 1)
+        title_row.addWidget(self.page_label)
+        layout.addLayout(title_row)
         header.addStretch()
         self.previous_page_button = QPushButton("<")
+        self.previous_page_button.setMaximumWidth(40)
         self.previous_page_button.setToolTip("Previous page")
         self.previous_page_button.clicked.connect(self._previous_preview_page)
         self.preview_page_number = QSpinBox()
@@ -884,6 +1054,7 @@ class MainWindow(QMainWindow):
         self.preview_page_number.setToolTip("Preview page")
         self.preview_page_number.valueChanged.connect(self._preview_page_number_changed)
         self.next_page_button = QPushButton(">")
+        self.next_page_button.setMaximumWidth(40)
         self.next_page_button.setToolTip("Next page")
         self.next_page_button.clicked.connect(self._next_preview_page)
         header.addWidget(self.previous_page_button)
@@ -899,30 +1070,46 @@ class MainWindow(QMainWindow):
         self.zoom_in_button.setToolTip("Zoom in")
         self.zoom_in_button.clicked.connect(self._zoom_preview_in)
         self.zoom_label = QLabel("Fit")
+        for button in (self.zoom_out_button, self.zoom_fit_button, self.zoom_in_button):
+            button.setMaximumWidth(50)
         header.addWidget(self.zoom_out_button)
         header.addWidget(self.zoom_fit_button)
         header.addWidget(self.zoom_in_button)
         header.addWidget(self.zoom_label)
-        header.addWidget(self.page_label)
         layout.addLayout(header)
         self.preview = PreviewGraphicsView(self._scene, self)
-        self.preview.setMinimumSize(620, 380)
+        self.preview.setMinimumSize(320, 240)
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setBackgroundBrush(QColor("#252a33"))
         self.preview.setRenderHint(QPainter.RenderHint.Antialiasing)
         layout.addWidget(self.preview, 1)
+        self.preview_file = QComboBox()
+        self.preview_file.setMinimumContentsLength(15)
+        self.preview_file.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.preview_file.setToolTip("เลือกไฟล์ในคิวเพื่อดูตัวอย่างลายน้ำ")
+        self.preview_file.activated.connect(self._select_preview_file)
+        layout.addWidget(self.preview_file)
         self._update_page_controls()
         return panel
 
+    def _select_preview_file(self, index: int) -> None:
+        source = self.preview_file.itemData(index)
+        if source:
+            try:
+                self._load_source(Path(source), preview_overlays=True)
+            except Exception as exc:
+                QMessageBox.warning(self, "เปิดตัวอย่างไม่ได้", str(exc))
+
     def _build_properties_panel(self) -> QWidget:
         outer = QWidget()
-        outer.setMinimumWidth(280)
+        outer.setMinimumWidth(240)
         outer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         outer_layout = QVBoxLayout(outer)
         title = QLabel("PROPERTIES — รายการที่เลือก")
         title.setObjectName("sectionTitle")
         outer_layout.addWidget(title)
         self.selected_item_label = QLabel("ยังไม่มีรายการที่เลือก — กด + Text หรือ + Logo")
+        self.selected_item_label.setWordWrap(True)
         outer_layout.addWidget(self.selected_item_label)
         self.type_value = QLabel("—")
         self.text_input = QLineEdit()
@@ -1034,6 +1221,7 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         content = QWidget()
         form = QFormLayout(content)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setContentsMargins(12, 12, 12, 12)
         form.setVerticalSpacing(10)
@@ -2015,6 +2203,15 @@ class MainWindow(QMainWindow):
         self.logo_button.setEnabled(is_logo)
         self.logo_value.setEnabled(is_logo)
         self.logo_size.setEnabled(is_logo)
+        for control, visible in (
+            (self.text_input, is_text), (self.font, is_text),
+            (self.font_size, is_text), (self.color_button, is_text),
+            (self.logo_button, is_logo), (self.logo_value, is_logo),
+            (self.logo_size, is_logo),
+        ):
+            for form in self.properties_tabs.findChildren(QFormLayout):
+                if form.indexOf(control) >= 0:
+                    form.setRowVisible(control, bool(visible))
 
     def _set_color_button(self, color_name: str) -> None:
         color = QColor(color_name)
@@ -2173,6 +2370,7 @@ class MainWindow(QMainWindow):
             self._refresh_batch_readiness()
             return False
         self._last_export_jobs = jobs
+        self._export_started_at = monotonic()
         self._thread = QThread(self)
         self._worker = ExportWorker(
             jobs,
@@ -2183,6 +2381,9 @@ class MainWindow(QMainWindow):
             self._config.resume_enabled,
         )
         self.cancel_action.setEnabled(True)
+        self.start_batch_action.setEnabled(False)
+        self.main_tabs.setCurrentIndex(1)
+        self.results_summary.setText("กำลังประมวลผล — ใช้การตั้งค่า ณ เวลากดเริ่ม")
         self._update_pipeline("กำลังประมวลผล")
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -2219,6 +2420,7 @@ class MainWindow(QMainWindow):
             self.batch_progress.setFormat("100% — เสร็จสิ้น")
             self._open_finished_output_folder()
         self._update_pipeline("เสร็จสิ้น — ตรวจ Output ได้แล้ว")
+        self._capture_results(message)
         QMessageBox.information(self, "เสร็จสิ้น", message)
 
     @staticmethod
@@ -2238,6 +2440,7 @@ class MainWindow(QMainWindow):
         self.batch_progress.setFormat("Export ไม่สำเร็จ")
         self.statusBar().showMessage("Export ไม่สำเร็จ")
         self._update_pipeline("Export ไม่สำเร็จ")
+        self._capture_results(message)
         QMessageBox.critical(self, "Export ไม่สำเร็จ", message)
 
     def _cancel_export(self) -> None:
@@ -2474,4 +2677,13 @@ class MainWindow(QMainWindow):
             return
         if self._document:
             self._document.close()
+        self._preferences.layout = {
+            "geometry": bytes(self.saveGeometry().toHex()).decode("ascii"),
+            "canvas": bytes(self.canvas_splitter.saveState().toHex()).decode("ascii"),
+            "batch": bytes(self.batch_splitter.saveState().toHex()).decode("ascii"),
+        }
+        try:
+            save_preferences(self._preferences)
+        except OSError:
+            pass  # A read-only preferences folder must not prevent closing the app.
         event.accept()

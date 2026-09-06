@@ -36,10 +36,12 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
     action_labels = [action.text() for action in toolbar.actions()]
 
     assert action_labels.count("เลือกไฟล์") == 1
-    assert action_labels.count("เลือกโฟลเดอร์ต้นทาง") == 1
-    assert "เพิ่ม Text+Logo" in action_labels
-    assert "บันทึก Default" in action_labels
-    assert "โหลด Default" in action_labels
+    menu_labels = [action.text() for menu in window.menuBar().actions()
+                   for action in menu.menu().actions()]
+    assert "เลือกโฟลเดอร์ต้นทาง" in menu_labels
+    assert "เพิ่ม Text+Logo" in menu_labels
+    assert "บันทึก Default" in menu_labels
+    assert "โหลด Default" in menu_labels
     assert "About Dev" in action_labels
     assert "เลือก PDF File(s)" not in action_labels
     assert "Batch PDF (หลายไฟล์)" not in action_labels
@@ -61,12 +63,12 @@ def test_preview_canvas_is_large_and_resizable(qtbot) -> None:
     qtbot.waitExposed(window)
 
     canvas_splitter = window.findChild(QSplitter, "canvasSplitter")
-    workspace_splitter = window.findChild(QSplitter, "workspaceSplitter")
+    workspace_splitter = window.findChild(QSplitter, "batchSplitter")
 
     assert canvas_splitter is not None
     assert workspace_splitter is not None
     assert canvas_splitter.orientation() == Qt.Orientation.Horizontal
-    assert workspace_splitter.orientation() == Qt.Orientation.Vertical
+    assert workspace_splitter.orientation() == Qt.Orientation.Horizontal
     assert 6 <= canvas_splitter.handleWidth() <= 10
     assert 6 <= workspace_splitter.handleWidth() <= 10
     assert canvas_splitter.opaqueResize()
@@ -77,12 +79,14 @@ def test_preview_canvas_is_large_and_resizable(qtbot) -> None:
     assert workspace_splitter.handle(1).toolTip() == "ลากเพื่อปรับขนาด panel"
     assert canvas_splitter.widget(0).maximumWidth() > 1000
     assert canvas_splitter.widget(2).maximumWidth() > 1000
-    assert window.preview.minimumWidth() >= 620
-    assert window.preview.minimumHeight() >= 380
+    assert window.preview.height() > 600
+    assert window.preview.minimumHeight() >= 240
     assert "ลากเส้นแบ่งเพื่อปรับขนาด panel" in window.statusBar().currentMessage()
     assert canvas_splitter.sizes()[1] > canvas_splitter.sizes()[0]
     assert canvas_splitter.sizes()[1] > canvas_splitter.sizes()[2]
-    assert workspace_splitter.sizes()[0] > workspace_splitter.sizes()[1]
+    window.main_tabs.setCurrentIndex(1)
+    qtbot.wait(0)
+    assert window.queue_table.height() > 500
 
 
 def test_about_dev_content_is_present_and_privacy_safe(qtbot) -> None:
@@ -193,16 +197,16 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
     groups = {group.title() for group in window.findChildren(QGroupBox)}
-    workspace = window.findChild(QSplitter, "workspaceSplitter")
-    batch_workspace = window.findChild(QTabWidget, "batchWorkspaceTopTabs")
+    workspace = window.findChild(QSplitter, "batchSplitter")
+    batch_workspace = window.findChild(QTabWidget, "mainWorkspaceTabs")
 
     assert {"Input — ไฟล์ต้นทาง", "Output — โฟลเดอร์ปลายทาง", "Options — การประมวลผล"}.issubset(groups)
     assert workspace is not None
     assert not workspace.childrenCollapsible()
     assert batch_workspace is not None
-    assert batch_workspace.count() == 2
-    assert batch_workspace.tabText(0) == "ตั้งค่างาน"
-    assert batch_workspace.tabText(1) == "Queue Monitor"
+    assert batch_workspace.count() == 3
+    assert batch_workspace.tabText(0) == "ออกแบบลายน้ำ"
+    assert batch_workspace.tabText(2) == "ผลลัพธ์"
     assert window.batch_tabs.count() == 3
     assert window.batch_tabs.tabText(0) == "ไฟล์และปลายทาง"
     assert window.batch_tabs.tabText(1) == "Search / ช่วงหน้า"
@@ -223,7 +227,7 @@ def test_batch_workspace_groups_controls_and_summary(qtbot) -> None:
         for scroll in settings_scrolls
         if scroll is not None and scroll.widget() is not None
     )
-    assert window.queue_table.minimumHeight() >= 320
+    assert window.queue_table.minimumHeight() >= 200
     assert window.queue_table.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     assert window.queue_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     assert window.queue_table.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
@@ -255,6 +259,7 @@ def test_settings_scroll_area_prevents_bottom_clipping(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
     window.resize(1800, 560)
+    window.main_tabs.setCurrentIndex(1)
     window.show()
     qtbot.waitExposed(window)
 
@@ -283,9 +288,73 @@ def test_queue_monitor_tab_shows_file_count(qtbot, tmp_path) -> None:
         ]
     )
 
-    batch_workspace = window.findChild(QTabWidget, "batchWorkspaceTopTabs")
+    batch_workspace = window.findChild(QTabWidget, "mainWorkspaceTabs")
     assert batch_workspace is not None
-    assert batch_workspace.tabText(1) == "Queue Monitor (2)"
+    assert batch_workspace.tabText(1) == "ไฟล์และการประมวลผล (2)"
+
+
+def test_results_survive_queue_clear_and_retry_only_failed(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    jobs = [(tmp_path / f"{name}.pdf", tmp_path / "out" / f"{name}-watermask.pdf")
+            for name in ("good", "bad")]
+    window._populate_queue(jobs)
+    window._last_export_jobs = jobs
+    window._update_queue_file(str(jobs[0][0]), "Completed", 100)
+    window._show_file_error(str(jobs[1][0]), "Unreadable PDF")
+    window._capture_results("สำเร็จ 1 ล้มเหลว 1")
+    window._clear_queue()
+    assert window.results_table.rowCount() == 2
+    assert window.results_table.item(1, 2).text() == "Unreadable PDF"
+    started = []
+    monkeypatch.setattr(window, "_start_export", lambda jobs: started.extend(jobs))
+    window._retry_failed_results()
+    assert started == [jobs[1]]
+    assert window.queue_table.rowCount() == 1
+    assert window.main_tabs.currentIndex() == 1
+
+
+def test_preview_file_switch_and_tabs_keep_overlay_settings(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    jobs = []
+    for name, pages in (("one", 1), ("two", 2)):
+        source = tmp_path / f"{name}.pdf"
+        with fitz.open() as document:
+            for _ in range(pages):
+                document.new_page()
+            document.save(source)
+        jobs.append((source, tmp_path / "out" / source.name))
+    window._populate_queue(jobs)
+    window._append_overlay(OverlayType.TEXT)
+    window.text_input.setText("Independent text")
+    window._select_preview_file(1)
+    for index in (1, 2, 0):
+        window.main_tabs.setCurrentIndex(index)
+    assert window._preview_page_count() == 2
+    assert window._source_path == jobs[1][0]
+    assert window.text_input.text() == "Independent text"
+    window._duplicate_overlay()
+    window.text_input.setText("Copy")
+    assert window._overlays[0]["text"] == "Independent text"
+    assert window._overlays[1]["text"] == "Copy"
+    assert window._overlays[0]["id"] != window._overlays[1]["id"]
+
+
+def test_layout_round_trip_uses_toml(qtbot):
+    from mtpdflogo.config.preferences import load_preferences
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    window.canvas_splitter.setSizes([250, 600, 330])
+    state = bytes(window.canvas_splitter.saveState().toHex()).decode("ascii")
+    window.close()
+    preferences = load_preferences()
+    assert preferences.layout["canvas"] == state
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    assert bytes(restored.canvas_splitter.saveState().toHex()).decode("ascii") == state
 
 
 def test_numeric_sliders_stay_synced_with_spin_boxes(qtbot) -> None:

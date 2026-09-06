@@ -1,13 +1,13 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-06 11:24 +07:00
+วันที่ทดสอบ: 2026-09-06 (UI redesign รอบ 3 แท็บ)
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
 Delivery artifact: `dist/MTPDFLogo-installer.zip`  
 Artifact SHA256: 4D3EE35DCE369839C74DD9CA26C10EFDF8FA0DF3675999489ED0AD71F3A0C1D9
 
-หมายเหตุ slice ล่าสุด: การปรับ Batch Workspace เป็น tab ชั้นนอก `ตั้งค่างาน` / `Queue Monitor`, กัน settings content ถูก squeeze จน clip ด้านล่างโดยให้ scroll เมื่อพื้นที่ไม่พอ, ให้ Queue table เป็นเจ้าของ scroll เอง, และทำให้ Preview canvas/resizable splitters มองเห็นและจับลากง่ายขึ้นเป็น source-only UI refactor
+หมายเหตุ slice ล่าสุด: 3 แท็บหลัก `ออกแบบลายน้ำ` / `ไฟล์และการประมวลผล` / `ผลลัพธ์`; Preview เต็มแท็บ, settings/queue แบ่งซ้ายขวา, ควบคุม overflow, เก็บผลลัพธ์หลังล้างคิว, retry เฉพาะ Failed และจำ layout ผ่าน TOML รายละเอียดใน `docs/UI_REDESIGN_2026-09-06.md`
 ตามคำสั่งผู้ใช้ว่า “ยังไม่ต้องทำตัว install”; artifact hash ด้านบนจึงเป็น installer zip จาก release gate ก่อนหน้า
 ไม่ใช่ zip ที่ rebuild จาก source commit ล่าสุด
 
@@ -27,11 +27,12 @@ installer smoke จาก zip จริง
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` | Passed: 144 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 79.54% >= 75% |
-| Build source installer zip | `build.bat` | Passed |
-| Installer smoke from zip | `.venv\Scripts\python.exe -m pytest tests\smoke -q --no-cov --run-installer-smoke --installer-zip dist\MTPDFLogo-installer.zip --installer-smoke-cache-dir build\installer-smoke-cache` | Passed: 3 passed |
-| Zip cleanliness | archive inspection | Passed: BAD_COUNT 0 |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` (`QT_QPA_PLATFORM=offscreen`) | Passed: 147 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 79.90% >= 75% |
+| UI visual review | Offscreen 1366×768; 910×512 logical at scale 1.5 | Reviewed; resize fit and readable scrolling columns |
+| Build source installer zip | `build.bat` | Historical pass; not rerun for this UI slice |
+| Installer smoke from zip | `tests/smoke` with `--run-installer-smoke` | Historical 3 passed; skipped for this UI slice |
+| Zip cleanliness | archive inspection | Historical pass: BAD_COUNT 0; no new artifact |
 
 ## Pipeline Coverage
 
