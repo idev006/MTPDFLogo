@@ -65,12 +65,19 @@ def test_preview_canvas_is_large_and_resizable(qtbot) -> None:
     assert workspace_splitter is not None
     assert canvas_splitter.orientation() == Qt.Orientation.Horizontal
     assert workspace_splitter.orientation() == Qt.Orientation.Vertical
-    assert canvas_splitter.handleWidth() >= 8
-    assert workspace_splitter.handleWidth() >= 8
+    assert canvas_splitter.handleWidth() >= 12
+    assert workspace_splitter.handleWidth() >= 12
+    assert canvas_splitter.opaqueResize()
+    assert workspace_splitter.opaqueResize()
     assert not canvas_splitter.childrenCollapsible()
     assert not workspace_splitter.childrenCollapsible()
+    assert canvas_splitter.handle(1).toolTip() == "ลากเพื่อปรับขนาด panel"
+    assert workspace_splitter.handle(1).toolTip() == "ลากเพื่อปรับขนาด panel"
+    assert canvas_splitter.widget(0).maximumWidth() > 1000
+    assert canvas_splitter.widget(2).maximumWidth() > 1000
     assert window.preview.minimumWidth() >= 620
     assert window.preview.minimumHeight() >= 380
+    assert "ลากเส้นแบ่งเพื่อปรับขนาด panel" in window.statusBar().currentMessage()
     assert canvas_splitter.sizes()[1] > canvas_splitter.sizes()[0]
     assert canvas_splitter.sizes()[1] > canvas_splitter.sizes()[2]
     assert workspace_splitter.sizes()[0] > workspace_splitter.sizes()[1]

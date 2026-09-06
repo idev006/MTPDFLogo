@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -368,8 +369,6 @@ class MainWindow(QMainWindow):
 
         self.canvas_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.canvas_splitter.setObjectName("canvasSplitter")
-        self.canvas_splitter.setChildrenCollapsible(False)
-        self.canvas_splitter.setHandleWidth(8)
         self.canvas_splitter.addWidget(self._build_overlay_panel())
         self.canvas_splitter.addWidget(self._build_preview_panel())
         self.canvas_splitter.addWidget(self._build_properties_panel())
@@ -377,15 +376,15 @@ class MainWindow(QMainWindow):
         self.canvas_splitter.setStretchFactor(1, 6)
         self.canvas_splitter.setStretchFactor(2, 0)
         self.canvas_splitter.setSizes([260, 1080, 320])
+        self._make_splitter_discoverable(self.canvas_splitter)
         self.workspace_splitter = QSplitter(Qt.Orientation.Vertical)
         self.workspace_splitter.setObjectName("workspaceSplitter")
-        self.workspace_splitter.setChildrenCollapsible(False)
-        self.workspace_splitter.setHandleWidth(8)
         self.workspace_splitter.addWidget(self.canvas_splitter)
         self.workspace_splitter.addWidget(self._build_queue_panel())
         self.workspace_splitter.setStretchFactor(0, 5)
         self.workspace_splitter.setStretchFactor(1, 2)
         self.workspace_splitter.setSizes([720, 260])
+        self._make_splitter_discoverable(self.workspace_splitter)
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(10, 8, 10, 10)
@@ -394,7 +393,9 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.workspace_splitter, 1)
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar(self))
-        self.statusBar().showMessage("พร้อมใช้งาน — เลือก PDF/Image File(s) เพื่อเริ่ม")
+        self.statusBar().showMessage(
+            "พร้อมใช้งาน — เลือก PDF/Image File(s) เพื่อเริ่ม; ลากเส้นแบ่งเพื่อปรับขนาด panel"
+        )
 
     def _build_pipeline_panel(self) -> QWidget:
         panel = QFrame()
@@ -505,6 +506,34 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _max_worker_limit() -> int:
         return max(1, min(os.cpu_count() or 2, 16))
+
+    @staticmethod
+    def _make_splitter_discoverable(splitter: QSplitter) -> None:
+        """Make resizable panes discoverable without replacing the OS theme."""
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(12)
+        splitter.setOpaqueResize(True)
+        splitter.setStyleSheet(
+            """
+            QSplitter::handle {
+                background-color: palette(midlight);
+                border: 1px solid palette(mid);
+            }
+            QSplitter::handle:hover {
+                background-color: palette(highlight);
+            }
+            """
+        )
+        cursor = (
+            Qt.CursorShape.SizeHorCursor
+            if splitter.orientation() == Qt.Orientation.Horizontal
+            else Qt.CursorShape.SizeVerCursor
+        )
+        tooltip = "ลากเพื่อปรับขนาด panel"
+        for index in range(1, splitter.count()):
+            handle = splitter.handle(index)
+            handle.setCursor(cursor)
+            handle.setToolTip(tooltip)
 
     def _build_queue_panel(self) -> QWidget:
         panel = QWidget()
@@ -804,7 +833,7 @@ class MainWindow(QMainWindow):
     def _build_overlay_panel(self) -> QWidget:
         panel = QWidget()
         panel.setMinimumWidth(220)
-        panel.setMaximumWidth(420)
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         title = QLabel("OVERLAY ITEMS")
         title.setObjectName("sectionTitle")
@@ -832,6 +861,7 @@ class MainWindow(QMainWindow):
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
         panel.setMinimumSize(640, 420)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         header = QHBoxLayout()
         self.preview_title = QLabel("PDF Preview")
@@ -879,7 +909,7 @@ class MainWindow(QMainWindow):
     def _build_properties_panel(self) -> QWidget:
         outer = QWidget()
         outer.setMinimumWidth(280)
-        outer.setMaximumWidth(520)
+        outer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         outer_layout = QVBoxLayout(outer)
         title = QLabel("PROPERTIES — รายการที่เลือก")
         title.setObjectName("sectionTitle")
