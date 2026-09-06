@@ -1,6 +1,6 @@
 # QA Test Report - MTPDFLogo
 
-วันที่ทดสอบ: 2026-09-06 (UI redesign รอบ 3 แท็บ)
+วันที่ทดสอบ: 2026-09-06 (Batch lifecycle guards และ grid progress bar)
 Branch: `feature/free-position-drag-drop`  
 Commit: report is stored in the Git commit that contains this file; run `git log -1 --oneline -- docs/QA_TEST_REPORT_2026-09-05.md` to verify  
 Python: 3.12.4  
@@ -24,11 +24,15 @@ installer smoke จาก zip จริง
 
 ## Quality Gates Executed
 
+Latest lifecycle slice: readiness waits for thread cleanup, guarded queue/output actions,
+single cancel request, and native per-row progress painting. Added real two-round PDF export
+regression without clearing settings/queue. See `docs/BATCH_READINESS_2026-09-06.md`.
+
 | Gate | Command | Result |
 | --- | --- | --- |
 | Lint | `.venv\Scripts\python.exe -m ruff check app tests` | Passed |
-| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` (`QT_QPA_PLATFORM=offscreen`) | Passed: 147 passed, 3 skipped |
-| Coverage gate | configured in `pyproject.toml` | Passed: 79.90% >= 75% |
+| Unit/Integration + coverage | `.venv\Scripts\python.exe -m pytest -q` (`QT_QPA_PLATFORM=offscreen`) | Passed: 150 passed, 3 skipped |
+| Coverage gate | configured in `pyproject.toml` | Passed: 80.64% >= 75% |
 | UI visual review | Offscreen 1366×768; 910×512 logical at scale 1.5 | Reviewed; resize fit and readable scrolling columns |
 | Build source installer zip | `build.bat` | Historical pass; not rerun for this UI slice |
 | Installer smoke from zip | `tests/smoke` with `--run-installer-smoke` | Historical 3 passed; skipped for this UI slice |

@@ -95,6 +95,7 @@ from mtpdflogo.config import (
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
+from mtpdflogo.presentation.progress_delegate import ProgressDelegate
 from mtpdflogo.presentation.qt_export_worker import ExportWorker
 
 
@@ -309,6 +310,8 @@ class MainWindow(QMainWindow):
         self._updating_properties = False
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
+        self._stop_requested = False
+        self._idle_controls: list[Any] = []
         self.setWindowTitle("MTPDFLogo — PDF Overlay Studio")
         self.resize(1500, 900)
         self._build_ui()
@@ -323,10 +326,12 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         action = toolbar.addAction("เลือกไฟล์")
+        self._idle_controls.append(action)
         action.setToolTip("เลือก PDF/รูปภาพ หนึ่งไฟล์หรือหลายไฟล์")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         action.triggered.connect(self._select_input_files)
         action = toolbar.addAction("เลือกโฟลเดอร์ต้นทาง")
+        self._idle_controls.append(action)
         action.setToolTip("โหลด PDF/รูปภาพ จากโฟลเดอร์ต้นทาง")
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
         action.triggered.connect(self._choose_batch_input_folder)
@@ -359,6 +364,7 @@ class MainWindow(QMainWindow):
         self._update_recent_settings_control()
         toolbar.addSeparator()
         action = toolbar.addAction("Export ไฟล์ปัจจุบัน")
+        self._idle_controls.append(action)
         action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
         action.triggered.connect(self._export_single)
         self.start_batch_action = toolbar.addAction("▶ เริ่ม Batch")
@@ -472,7 +478,7 @@ class MainWindow(QMainWindow):
         has_pdf = self.queue_table.rowCount() > 0 or self._source_path is not None
         has_overlay = bool(self._overlays)
         has_output = bool(self.batch_output_folder.text().strip())
-        is_running = self.cancel_action.isEnabled()
+        is_running = self._export_busy()
         has_output_preview = self._source_path is not None and not self._preview_bakes_overlays
         done_states = [
             has_pdf,
@@ -627,6 +633,7 @@ class MainWindow(QMainWindow):
         remove = QPushButton("ลบรายการที่เลือก")
         remove.clicked.connect(self._remove_queue_rows)
         clear = QPushButton("ล้าง Queue")
+        self._idle_controls.extend([remove, clear, self.batch_tabs])
         clear.clicked.connect(self._clear_queue)
         show_error = QPushButton("ดู Error")
         show_error.setToolTip("เปิดรายละเอียด Error ของรายการที่เลือก")
@@ -645,6 +652,7 @@ class MainWindow(QMainWindow):
         self.batch_progress.setToolTip("Progress รวมของ Batch")
         queue_layout.addWidget(self.batch_progress)
         self.queue_table = QTableWidget(0, 7)
+        self.queue_table.setItemDelegateForColumn(4, ProgressDelegate(self.queue_table))
         self.queue_table.setHorizontalHeaderLabels(
             ["#", "Input File", "Pages/Items", "Output File", "Progress", "Status", "Error"]
         )
@@ -671,7 +679,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setColumnWidth(1, 220)
         self.queue_table.setColumnWidth(3, 260)
         self.queue_table.setColumnWidth(2, 96)
-        self.queue_table.setColumnWidth(4, 110)
+        self.queue_table.setColumnWidth(4, 160)
         self.queue_table.setColumnWidth(5, 125)
         self.queue_table.setColumnWidth(6, 220)
         queue_layout.addWidget(self.queue_table, 1)
@@ -762,7 +770,7 @@ class MainWindow(QMainWindow):
             )
 
     def _retry_failed_results(self) -> None:
-        if self._thread is not None:
+        if self._export_busy():
             return
         jobs = [
             (Path(self.results_table.item(row, 0).data(Qt.ItemDataRole.UserRole)),
@@ -1235,6 +1243,8 @@ class MainWindow(QMainWindow):
         return sorted(path.stem for path in directory.rglob("*.ttf")) or ["Arial"]
 
     def _populate_queue(self, jobs: list[tuple[Path, Path]]) -> None:
+        if self._export_busy():
+            return
         self.queue_table.setRowCount(0)
         for row, (source, destination) in enumerate(jobs):
             self.queue_table.insertRow(row)
@@ -1256,11 +1266,14 @@ class MainWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, str(destination))
                 self.queue_table.setItem(row, column, item)
             self.queue_table.item(row, 1).setData(Qt.ItemDataRole.UserRole, str(source))
+            self.queue_table.item(row, 4).setData(Qt.ItemDataRole.UserRole, 0)
         self._update_queue_summary()
         self._reset_batch_progress()
         self._update_pipeline()
 
     def _batch_output_text_changed(self) -> None:
+        if self._export_busy():
+            return
         output_text = self.batch_output_folder.text().strip()
         if not output_text:
             self._pending_batch_jobs = []
@@ -1288,6 +1301,8 @@ class MainWindow(QMainWindow):
         self._apply_output_folder(output, "พร้อมเริ่ม Batch")
 
     def _choose_batch_output(self) -> None:
+        if self._export_busy():
+            return
         initial = self.batch_output_folder.text().strip() or str(Path.home())
         folder = QFileDialog.getExistingDirectory(self, "เลือก Output Folder", initial)
         if not folder:
@@ -1545,6 +1560,8 @@ class MainWindow(QMainWindow):
         self.preview_page_number.setValue(self._preview_page_index + 2)
 
     def _choose_batch_input_folder(self) -> None:
+        if self._export_busy():
+            return
         initial = self.batch_input_folder.text().strip() or str(
             self._preferences.pdf_folder or Path.home()
         )
@@ -1555,6 +1572,8 @@ class MainWindow(QMainWindow):
         self._load_input_folder_files()
 
     def _load_input_folder_files(self) -> None:
+        if self._export_busy():
+            return
         input_text = self.batch_input_folder.text().strip()
         if not input_text:
             self.statusBar().showMessage("กรุณาเลือกหรือวาง Input Folder")
@@ -1621,11 +1640,18 @@ class MainWindow(QMainWindow):
             jobs.append((Path(source_data), Path(destination_data)))
         return jobs
 
+    def _export_busy(self) -> bool:
+        """The run owns the queue until thread cleanup, even after its final signal."""
+        return self._thread is not None or self._worker is not None
+
     def _refresh_batch_readiness(self) -> None:
+        busy = self._export_busy()
+        for control in self._idle_controls:
+            control.setEnabled(not busy)
         self._pending_batch_jobs = self._queue_jobs_from_table()
         readiness = evaluate_batch_readiness(
             has_jobs=bool(self._pending_batch_jobs),
-            is_running=self._worker is not None and self.cancel_action.isEnabled(),
+            is_running=busy,
             page_filter_error=self._page_filter_error(),
             has_effective_overlay=self._has_effective_overlay(),
         )
@@ -1674,7 +1700,11 @@ class MainWindow(QMainWindow):
     def _update_queue_file(self, source_key: str, status: str, progress: int) -> None:
         row = self._queue_row_for_source(source_key)
         if row is not None:
+            progress = max(0, min(100, progress))
             self.queue_table.item(row, 4).setText(f"{progress}%")
+            self.queue_table.item(row, 4).setData(Qt.ItemDataRole.UserRole, progress)
+            if self._stop_requested and status in {"Pending", "Processing"}:
+                status = "Stopping"
             self.queue_table.item(row, 5).setText(status)
             self._update_queue_summary()
 
@@ -1683,9 +1713,13 @@ class MainWindow(QMainWindow):
         if row is None:
             return
         percent = int(current * 100 / total) if total else 0
+        percent = max(0, min(100, percent))
+        self.queue_table.item(row, 4).setData(Qt.ItemDataRole.UserRole, percent)
         self.queue_table.item(row, 4).setText(f"{percent}% ({current}/{total})")
         if percent < 100:
-            self.queue_table.item(row, 5).setText("Processing")
+            self.queue_table.item(row, 5).setText(
+                "Stopping" if self._stop_requested else "Processing"
+            )
         self._update_queue_summary()
 
     def _reset_batch_progress(self) -> None:
@@ -1717,7 +1751,7 @@ class MainWindow(QMainWindow):
         self._update_queue_summary()
 
     def _remove_queue_rows(self) -> None:
-        if self._worker is not None and self.cancel_action.isEnabled():
+        if self._export_busy():
             QMessageBox.information(self, "กำลังประมวลผล", "หยุด Batch ก่อนลบรายการ")
             return
         rows = sorted({index.row() for index in self.queue_table.selectedIndexes()}, reverse=True)
@@ -1735,13 +1769,13 @@ class MainWindow(QMainWindow):
         self._update_pipeline()
 
     def _clear_queue(self) -> None:
-        if self._worker is not None and self.cancel_action.isEnabled():
+        if self._export_busy():
             QMessageBox.information(self, "กำลังประมวลผล", "หยุด Batch ก่อนล้าง Queue")
             return
         self.queue_table.setRowCount(0)
         self._pending_batch_jobs.clear()
         self._input_root = None
-        self.start_batch_action.setEnabled(False)
+        self._refresh_batch_readiness()
         self._update_queue_summary()
         self._update_pipeline("ล้าง Queue แล้ว")
 
@@ -1763,6 +1797,8 @@ class MainWindow(QMainWindow):
         return QFont(family, point_size)
 
     def _select_input_files(self) -> None:
+        if self._export_busy():
+            return
         initial_folder = str(self._preferences.pdf_folder or Path.home())
         dialog = QFileDialog(self, "เลือก PDF/Image File(s)", initial_folder)
         dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
@@ -2316,6 +2352,8 @@ class MainWindow(QMainWindow):
         return overlays_to_specs(self._overlays, self._font_path)
 
     def _export_single(self) -> None:
+        if self._export_busy():
+            return
         if self._source_path is None:
             QMessageBox.information(self, "ยังไม่ได้เปิดไฟล์", "กรุณาเลือกไฟล์ก่อน Export")
             return
@@ -2342,6 +2380,9 @@ class MainWindow(QMainWindow):
             self._update_queue_summary()
 
     def _start_export(self, jobs: list[tuple[Path, Path]]) -> bool:
+        if self._export_busy() or not jobs:
+            self._refresh_batch_readiness()
+            return False
         output_text = self.batch_output_folder.text().strip()
         output_root = Path(output_text) if output_text else jobs[0][1].parent
         specs = self._to_specs()
@@ -2370,6 +2411,13 @@ class MainWindow(QMainWindow):
             self._refresh_batch_readiness()
             return False
         self._last_export_jobs = jobs
+        self._stop_requested = False
+        for source, _destination in jobs:
+            row = self._queue_row_for_source(str(source))
+            if row is not None:
+                self.queue_table.item(row, 6).setText("")
+                self.queue_table.item(row, 6).setToolTip("")
+                self._update_queue_file(str(source), "Pending", 0)
         self._export_started_at = monotonic()
         self._thread = QThread(self)
         self._worker = ExportWorker(
@@ -2384,6 +2432,7 @@ class MainWindow(QMainWindow):
         self.start_batch_action.setEnabled(False)
         self.main_tabs.setCurrentIndex(1)
         self.results_summary.setText("กำลังประมวลผล — ใช้การตั้งค่า ณ เวลากดเริ่ม")
+        self._refresh_batch_readiness()
         self._update_pipeline("กำลังประมวลผล")
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -2400,6 +2449,7 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
         self._thread.finished.connect(self._export_thread_finished)
+        self._thread.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
         return True
@@ -2436,6 +2486,11 @@ class MainWindow(QMainWindow):
 
     def _export_failed(self, message: str) -> None:
         self.cancel_action.setEnabled(False)
+        for row in range(self.queue_table.rowCount()):
+            if self.queue_table.item(row, 5).text() not in {"Completed", "Failed", "Cancelled"}:
+                self.queue_table.item(row, 5).setText("Failed")
+                self.queue_table.item(row, 6).setText(message)
+                self.queue_table.item(row, 6).setToolTip(message)
         self._refresh_batch_readiness()
         self.batch_progress.setFormat("Export ไม่สำเร็จ")
         self.statusBar().showMessage("Export ไม่สำเร็จ")
@@ -2444,7 +2499,9 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Export ไม่สำเร็จ", message)
 
     def _cancel_export(self) -> None:
-        if self._worker is not None:
+        if self._worker is not None and not self._stop_requested:
+            self._stop_requested = True
+            self.cancel_action.setEnabled(False)
             self._worker.cancel()
             self._mark_active_rows_stopping()
             self.statusBar().showMessage("กำลังหยุดหลังจากงานที่กำลังทำเสร็จ...")
@@ -2453,6 +2510,10 @@ class MainWindow(QMainWindow):
     def _export_thread_finished(self) -> None:
         self._worker = None
         self._thread = None
+        self._stop_requested = False
+        self.cancel_action.setEnabled(False)
+        self._refresh_batch_readiness()
+        self._update_pipeline()
 
     def _show_file_error(self, source_key: str, error: str) -> None:
         self._update_queue_file(source_key, "Failed", 0)
@@ -2661,7 +2722,7 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: Any) -> None:
-        if self._worker is not None and self.cancel_action.isEnabled():
+        if self._export_busy():
             answer = QMessageBox.question(
                 self,
                 "Batch กำลังทำงาน",

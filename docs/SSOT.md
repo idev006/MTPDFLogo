@@ -124,6 +124,11 @@
 
 ## Current decisions
 
+- Batch busy state อ้างอิง worker/thread ownership จน `QThread.finished` cleanup เสร็จ ห้ามใช้สถานะ enabled ของปุ่ม Stop เป็นหลักฐานว่างานจบ
+- คำสั่งเริ่ม/เลือกไฟล์/เปลี่ยนปลายทาง/ล้างคิวต้องตรวจ busy ใน handler และปิด controls ที่เกี่ยวข้องระหว่างรันหรือหยุด; cleanup คืน controls และคำนวณ readiness ใหม่โดยรักษาค่าเดิม
+- เริ่มรอบใหม่หลัง preflight ผ่านจึง reset status/progress/error ของ jobs รอบนั้น; กดหยุดซ้ำต้องไม่ส่ง cancel ซ้ำ
+- Progress ในคิวใช้ native delegate พร้อมเปอร์เซ็นต์/จำนวนหน้าจาก worker events และค่าตัวเลขใน item model ไม่สร้าง QProgressBar widget ต่อแถว
+
 - Overlay model คือ `OverlayItem` หนึ่งรายการต่อหนึ่ง Text หรือ Logo
 - Overlay preset เป็นไฟล์ TOML มี schema version และเก็บค่าของ Text/Logo แต่ละรายการแยกกัน
 - Position ใช้ preset 9 จุด พร้อม offset/margin

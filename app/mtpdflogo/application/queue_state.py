@@ -15,6 +15,7 @@ STATUS_MESSAGES = {
     "Completed": "สำเร็จ",
     "Failed": "ล้มเหลว",
     "Cancelled": "ยกเลิก",
+    "Stopping": "กำลังหยุด",
 }
 
 

@@ -773,6 +773,87 @@ def test_batch_overall_progress_updates_from_worker_signal(qtbot) -> None:
     assert "42% — input.pdf" in window.statusBar().currentMessage()
 
 
+def test_busy_guard_blocks_reentry_even_when_stop_button_is_disabled(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    jobs = [(tmp_path / "a.pdf", tmp_path / "out.pdf")]
+    window._populate_queue(jobs)
+    window._append_overlay(OverlayType.TEXT)
+    window._thread = object()  # Final signal received; thread cleanup still pending.
+    window.cancel_action.setEnabled(False)
+    try:
+        window._refresh_batch_readiness()
+        assert not window.start_batch_action.isEnabled()
+        assert not window.batch_tabs.isEnabled()
+        assert not window._start_export(jobs)
+        window._populate_queue([])
+        assert window.queue_table.rowCount() == 1
+    finally:
+        window._export_thread_finished()
+    assert window.start_batch_action.isEnabled()
+    assert window.batch_tabs.isEnabled()
+    assert window._overlays
+    assert not window._start_export([])
+
+
+def test_grid_progress_paints_real_numeric_data(qtbot, tmp_path):
+    from mtpdflogo.presentation.progress_delegate import ProgressDelegate
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    source = tmp_path / "a.pdf"
+    window._populate_queue([(source, tmp_path / "out.pdf")])
+    assert isinstance(window.queue_table.itemDelegateForColumn(4), ProgressDelegate)
+    window._update_queue_progress(str(source), 3, 8)
+    progress = window.queue_table.item(0, 4)
+    assert progress.text() == "37% (3/8)"
+    assert progress.data(Qt.ItemDataRole.UserRole) == 37
+    assert window.queue_table.cellWidget(0, 4) is None
+    window.main_tabs.setCurrentIndex(1)
+    window.show()
+    qtbot.waitExposed(window)
+    window.queue_table.scrollTo(window.queue_table.model().index(0, 4))
+    qtbot.wait(0)
+    assert not window.queue_table.grab().isNull()  # Exercise native delegate painting.
+    window._update_queue_file(str(source), "Completed", 100)
+    assert progress.data(Qt.ItemDataRole.UserRole) == 100
+    window._update_queue_progress(str(source), 0, 0)
+    assert progress.data(Qt.ItemDataRole.UserRole) == 0
+
+
+def test_two_real_export_rounds_restore_controls_without_clearing(qtbot, tmp_path, monkeypatch):
+    source = tmp_path / "input.pdf"
+    with fitz.open() as pdf:
+        pdf.new_page()
+        pdf.save(source)
+    output = tmp_path / "output"
+    output.mkdir()
+    destination = output / "input-watermask.pdf"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    window._append_overlay(OverlayType.TEXT)
+    window.batch_output_folder.setText(str(output))
+    window.worker_count.setValue(1)
+    window.overwrite_outputs.setChecked(True)
+    window.open_output_folder_on_finish.setChecked(False)
+    jobs = [(source, destination)]
+    window._populate_queue(jobs)
+    for text in ("first run", "second run"):
+        window.text_input.setText(text)
+        assert window._start_export(jobs)
+        assert not window.start_batch_action.isEnabled()
+        qtbot.waitUntil(lambda: not window._export_busy(), timeout=30000)
+        assert window.start_batch_action.isEnabled()
+        assert window.batch_tabs.isEnabled()
+        assert not window.cancel_action.isEnabled()
+        assert window.queue_table.item(0, 5).text() == "Completed"
+        assert window.queue_table.item(0, 4).data(Qt.ItemDataRole.UserRole) == 100
+        assert window.text_input.text() == text
+        with fitz.open(destination) as pdf:
+            assert pdf.page_count == 1
+
+
 def test_destination_uses_configured_output_suffix(qtbot, tmp_path) -> None:
     source = tmp_path / "input.pdf"
     output = tmp_path / "out"
@@ -1278,6 +1359,8 @@ def test_cancel_button_marks_active_rows_and_restores_ready_state(
     assert window.queue_table.item(0, 5).text() == "Completed"
     assert window.queue_table.item(1, 5).text() == "Cancelled"
     assert not window.cancel_action.isEnabled()
+    assert not window.start_batch_action.isEnabled()
+    window._export_thread_finished()
     assert window.start_batch_action.isEnabled()
 
 
@@ -1319,6 +1402,7 @@ def test_close_during_export_requests_cancel_and_ignores_event(
     assert worker.cancel_called
     assert event.ignored
     assert not event.accepted
+    window._export_thread_finished()
 
 
 def test_properties_controls_match_selected_text_and_logo_items(qtbot, tmp_path) -> None:
