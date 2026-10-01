@@ -357,6 +357,84 @@ def test_layout_round_trip_uses_toml(qtbot):
     assert bytes(restored.canvas_splitter.saveState().toHex()).decode("ascii") == state
 
 
+@pytest.mark.parametrize("overlay_type", [OverlayType.TEXT, OverlayType.IMAGE])
+@pytest.mark.parametrize("absolute", [False, True])
+def test_mouse_corner_resize_updates_only_selected_item_and_export(
+    qtbot, tmp_path, overlay_type, absolute,
+):
+    from mtpdflogo.infrastructure.pdf.overlay_service import apply_overlays
+    from mtpdflogo.presentation.resize_handle import OverlayResizeHandle
+
+    source = tmp_path / "resize.pdf"
+    logo = tmp_path / "logo.png"
+    Image.new("RGB", (80, 50), "red").save(logo)
+    with fitz.open() as pdf:
+        pdf.new_page()
+        pdf.save(source)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_pdf(source)
+    window._append_overlay(OverlayType.TEXT)
+    window._append_overlay(overlay_type, str(logo) if overlay_type is OverlayType.IMAGE else "")
+    window.position.setCurrentIndex(window.position.findData(Position.MIDDLE_CENTER))
+    window.rotation.setValue(30)
+    if absolute:
+        window.position_mode.setCurrentIndex(window.position_mode.findData(PositionMode.ABSOLUTE))
+    window.resize(1500, 900)
+    window.show()
+    qtbot.waitExposed(window)
+    window._set_preview_zoom(1.25 if absolute else 0.75)
+    qtbot.wait(30)
+    model = window._overlays[-1]
+    field = "font_size" if overlay_type is OverlayType.TEXT else "logo_size"
+    before = model[field]
+    other_before = dict(window._overlays[0])
+    handles = [item for item in window._scene.items()
+               if isinstance(item, OverlayResizeHandle) and item.isVisible()]
+    assert len(handles) == 1
+    handle = handles[0]
+    graphic = handle.parentItem()
+    center = window.preview.mapFromScene(graphic.mapToScene(graphic.boundingRect().center()))
+    start = window.preview.mapFromScene(handle.scenePos())
+    end = center + (start - center) * 1.5
+    baseline = tmp_path / "before.pdf"
+    apply_overlays(source, baseline, window._to_specs())
+    qtbot.mousePress(window.preview.viewport(), Qt.MouseButton.LeftButton, pos=start)
+    qtbot.mouseMove(window.preview.viewport(), end, delay=30)
+    qtbot.mouseRelease(window.preview.viewport(), Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(lambda: model[field] > before)
+    assert window._overlays[0] == other_before
+    assert model["position_mode"] is (PositionMode.ABSOLUTE if absolute else PositionMode.PRESET)
+    assert model["rotation"] == 30
+    control = window.font_size if overlay_type is OverlayType.TEXT else window.logo_size
+    assert control.value() == model[field]
+    preset = tmp_path / "resized.toml"
+    window._save_overlay_settings_to_file(preset)
+    assert window._load_overlay_settings_file(preset)
+    assert window._overlays[-1][field] == model[field]
+    output = tmp_path / "after.pdf"
+    apply_overlays(source, output, window._to_specs())
+    with fitz.open(baseline) as before_pdf, fitz.open(output) as after_pdf:
+        assert before_pdf[0].get_pixmap().samples != after_pdf[0].get_pixmap().samples
+
+
+def test_unlimited_search_preserves_minimum_and_reload(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_keyword.setText("amount")
+    window.page_filter_min.setValue(2)
+    window.page_filter_max.setValue(0)
+    assert window.page_filter_min.value() == 2
+    assert window._page_text_rule().max_occurrences is None
+    assert window._page_text_rule().min_occurrences == 2
+    settings = window._page_filter_settings()
+    window._apply_page_filter_settings(settings)
+    assert window.page_filter_range_slider.lowerValue() == 2
+    assert window.page_filter_range_slider.upperValue() == 100
+    assert window.page_filter_max.value() == 0
+
+
 def test_numeric_sliders_stay_synced_with_spin_boxes(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)

@@ -65,7 +65,7 @@ def search_pdf_pages(
                 continue
             text = page.get_text("text")
             occurrences = rule.count_occurrences(text)
-            if rule.keyword.strip() and occurrences <= 0:
+            if not rule.matches_count(occurrences):
                 continue
             matched_pages += 1
             total_occurrences += occurrences

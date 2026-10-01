@@ -110,9 +110,12 @@ class PageTextRule:
         return self._searchable_keyword
 
     def matches(self, text: str) -> bool:
+        return self.matches_count(self.count_occurrences(text))
+
+    def matches_count(self, count: int) -> bool:
+        """Single acceptance rule shared by search diagnostics and export."""
         if not self.keyword.strip():
             return True
-        count = self.count_occurrences(text)
         if count < self.min_occurrences:
             return False
         if self.max_occurrences is not None and count > self.max_occurrences:

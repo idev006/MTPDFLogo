@@ -3,9 +3,50 @@ from __future__ import annotations
 from pathlib import Path
 
 import fitz
+import pytest
 from mtpdflogo.application.page_search import search_pdf_batch, search_pdf_pages
 from mtpdflogo.config.resources import font_directory
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule
+
+
+@pytest.mark.parametrize("regex", [False, True])
+@pytest.mark.parametrize("minimum,maximum,expected", [
+    (2, 2, [3]), (0, 2, [1, 2, 3]), (0, 0, [1]),
+    (0, None, [1, 2, 3, 4, 5]),
+])
+def test_search_and_export_choose_identical_pages(tmp_path, regex, minimum, maximum, expected):
+    from mtpdflogo.domain.models import OverlayType, Position
+    from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, apply_overlays
+    from PIL import Image
+
+    source, output = tmp_path / "source.pdf", tmp_path / "output.pdf"
+    logo = tmp_path / "logo.png"
+    Image.new("RGB", (20, 20), "red").save(logo)
+    _make_search_pdf(source, ["amount " * count for count in (0, 1, 2, 3, 10)])
+    rule = PageTextRule("amount", min_occurrences=minimum, max_occurrences=maximum,
+                        use_regex=regex)
+    result = search_pdf_pages(source, rule)
+    assert [hit.page_number for hit in result.hits] == expected
+    apply_overlays(source, output, [
+        PdfOverlaySpec(OverlayType.TEXT, Position.BOTTOM_CENTER, text="watermark"),
+        PdfOverlaySpec(OverlayType.IMAGE, Position.TOP_RIGHT, asset_path=logo),
+    ], page_text_rule=rule)
+    with fitz.open(output) as document:
+        assert [i + 1 for i, page in enumerate(document) if page.get_images()] == expected
+        for i, page in enumerate(document):
+            assert len(page.get_images()) == (2 if i + 1 in expected else 0)
+
+
+@pytest.mark.parametrize("regex", [False, True])
+def test_reported_thai_256_page_overflow_is_not_a_match(tmp_path, regex):
+    source = tmp_path / "thai.pdf"
+    font = font_directory() / "Mali" / "Mali-Regular.ttf"
+    _make_search_pdf(source, ["จำนวนเงิน\nจำนวนเงิน\nจำนวนเงิน"] * 256, font)
+    rule = PageTextRule("จำนวนเงิน", min_occurrences=2, max_occurrences=2, use_regex=regex)
+    result = search_pdf_pages(source, rule)
+    assert result.page_count == 256
+    assert result.matched_pages == result.total_occurrences == 0
+    assert result.hits == []
 
 
 def _make_search_pdf(path: Path, page_texts: list[str], font_path: Path | None = None) -> None:

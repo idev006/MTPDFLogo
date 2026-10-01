@@ -124,6 +124,12 @@
 
 ## Current decisions
 
+- Search diagnostics และ PDF export ต้องใช้ `PageTextRule.matches_count` เดียวกัน รวม min/max และ page ranges; totals ของ Search นับเฉพาะหน้าที่ผ่านเงื่อนไข
+- ตัวนับอาจหยุดที่ max+1 สำหรับหน้าที่เกินขอบบน ห้ามรายงานค่านั้นเป็นจำนวนจริงของหน้าที่ถูกปฏิเสธ
+- UI max=0 ยังคงหมายถึงไม่จำกัด ต้องแสดงให้ชัดและไม่ลดค่า minimum ตามไปด้วย
+- รายการ Text/Logo ที่เลือกมีจุดจับมุมล่างขวาเพื่อปรับขนาดด้วยเมาส์ รักษาสัดส่วน และเขียนค่ากลับ `font_size`/`logo_size` เดิม; ไม่เปลี่ยน position mode หรือ rotation
+- ห้าม rebuild graphics scene ระหว่าง mouse press ที่กำลังเลือก overlay; commit resize หลัง event dispatch เพื่อไม่ลบ graphics item ที่รับ event อยู่
+
 - Batch busy state อ้างอิง worker/thread ownership จน `QThread.finished` cleanup เสร็จ ห้ามใช้สถานะ enabled ของปุ่ม Stop เป็นหลักฐานว่างานจบ
 - คำสั่งเริ่ม/เลือกไฟล์/เปลี่ยนปลายทาง/ล้างคิวต้องตรวจ busy ใน handler และปิด controls ที่เกี่ยวข้องระหว่างรันหรือหยุด; cleanup คืน controls และคำนวณ readiness ใหม่โดยรักษาค่าเดิม
 - เริ่มรอบใหม่หลัง preflight ผ่านจึง reset status/progress/error ของ jobs รอบนั้น; กดหยุดซ้ำต้องไม่ส่ง cancel ซ้ำ

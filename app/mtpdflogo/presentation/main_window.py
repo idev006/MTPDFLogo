@@ -97,6 +97,7 @@ from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 from mtpdflogo.presentation.progress_delegate import ProgressDelegate
 from mtpdflogo.presentation.qt_export_worker import ExportWorker
+from mtpdflogo.presentation.resize_handle import OverlayResizeHandle
 
 
 class RangeSlider(QWidget):
@@ -230,7 +231,7 @@ class DraggableTextItem(QGraphicsTextItem):
 
     def mousePressEvent(self, event: Any) -> None:
         self._press_pos = self.pos()
-        self.owner._select_overlay_by_id(self.overlay_id)
+        self.owner._select_overlay_from_preview(self.overlay_id)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: Any) -> None:
@@ -256,7 +257,7 @@ class DraggablePixmapItem(QGraphicsPixmapItem):
 
     def mousePressEvent(self, event: Any) -> None:
         self._press_pos = self.pos()
-        self.owner._select_overlay_by_id(self.overlay_id)
+        self.owner._select_overlay_from_preview(self.overlay_id)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: Any) -> None:
@@ -893,6 +894,8 @@ class MainWindow(QMainWindow):
         self.page_filter_min.valueChanged.connect(self._page_filter_min_changed)
         self.page_filter_max = QSpinBox()
         self.page_filter_max.setRange(0, 100)
+        self.page_filter_max.setSpecialValueText("ไม่จำกัด")
+        self.page_filter_max.setToolTip("0 = ไม่จำกัดจำนวนครั้ง; ค่าบวกคือขอบบนจริง")
         self.page_filter_max.setValue(100)
         self.page_filter_max.valueChanged.connect(self._page_filter_max_changed)
         self.page_filter_range_slider = RangeSlider(
@@ -902,7 +905,7 @@ class MainWindow(QMainWindow):
             self.page_filter_max.value(),
         )
         self.page_filter_range_slider.setToolTip(
-            "ลากสองด้านเพื่อกำหนดช่วงจำนวนครั้งต่อหน้า ตั้งแต่ 0 ถึง 100"
+            "ลากเพื่อกำหนดช่วง 0–100 ครั้ง; ช่องไม่เกิน 0 = ไม่จำกัด (แถบแสดงถึง 100)"
         )
         self.page_filter_range_slider.rangeChanged.connect(
             self._page_filter_range_slider_changed
@@ -1339,9 +1342,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_syncing_occurrence_controls", False):
             return
         self._syncing_occurrence_controls = True
-        if value > self.page_filter_max.value():
+        if self.page_filter_max.value() > 0 and value > self.page_filter_max.value():
             self.page_filter_max.setValue(value)
-        self.page_filter_range_slider.setValues(value, self.page_filter_max.value())
+        self.page_filter_range_slider.setValues(value, self.page_filter_max.value() or 100)
         self._syncing_occurrence_controls = False
         self._page_filter_changed()
 
@@ -1349,9 +1352,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_syncing_occurrence_controls", False):
             return
         self._syncing_occurrence_controls = True
-        if value < self.page_filter_min.value():
+        if value > 0 and value < self.page_filter_min.value():
             self.page_filter_min.setValue(value)
-        self.page_filter_range_slider.setValues(self.page_filter_min.value(), value)
+        self.page_filter_range_slider.setValues(self.page_filter_min.value(), value or 100)
         self._syncing_occurrence_controls = False
         self._page_filter_changed()
 
@@ -1378,6 +1381,8 @@ class MainWindow(QMainWindow):
         self.test_queue_filter_button.setEnabled(enabled)
         if not enabled:
             self.page_filter_result.setText("Search ปิดอยู่ — จะวาง overlay ทุกหน้า")
+        else:
+            self.page_filter_result.setText("เงื่อนไขเปลี่ยนแล้ว — กดทดสอบ Search อีกครั้ง")
         error = self._page_filter_error()
         if error:
             self.start_batch_action.setEnabled(False)
@@ -1420,7 +1425,7 @@ class MainWindow(QMainWindow):
         else:
             self.page_filter_result.setText(
                 f"ไม่พบหน้าที่ตรงเงื่อนไขใน {result.page_count} หน้า "
-                f"({result.elapsed_seconds:.2f}s)"
+                f"({result.elapsed_seconds:.2f}s) — จะไม่วางลายน้ำในไฟล์นี้"
             )
 
     def _test_page_filter_on_queue(self) -> None:
@@ -2104,7 +2109,7 @@ class MainWindow(QMainWindow):
         self.page_filter_max.setValue(int(settings.get("max_occurrences", 100)))
         self.page_filter_range_slider.setValues(
             self.page_filter_min.value(),
-            self.page_filter_max.value(),
+            self.page_filter_max.value() or 100,
         )
         self.page_filter_ranges.setText(str(settings.get("page_ranges", "")))
         for control in controls:
@@ -2179,6 +2184,43 @@ class MainWindow(QMainWindow):
                     self.overlay_list.setCurrentRow(row)
                 return
 
+    def _select_overlay_from_preview(self, overlay_id: str) -> None:
+        # Selecting must not delete the graphics item handling the mouse event.
+        self._selecting_preview = True
+        try:
+            self._select_overlay_by_id(overlay_id)
+        finally:
+            self._selecting_preview = False
+        for graphic in self._scene.items():
+            if isinstance(graphic, (DraggableTextItem, DraggablePixmapItem)):
+                selected = graphic.overlay_id == overlay_id
+                graphic.setSelected(selected)
+                for child in graphic.childItems():
+                    if isinstance(child, OverlayResizeHandle):
+                        child.setVisible(selected)
+
+    def _bounded_resize_factor(self, overlay_id: str, factor: float) -> float:
+        item = next((item for item in self._overlays if item["id"] == overlay_id), None)
+        if item is None:
+            return 1.0
+        is_text = item["type"] is OverlayType.TEXT
+        control = self.font_size if is_text else self.logo_size
+        value = item["font_size" if is_text else "logo_size"]
+        size = max(control.minimum(), min(control.maximum(), round(value * factor)))
+        return size / value
+
+    def _commit_overlay_resize(self, overlay_id: str, factor: float) -> None:
+        item = next((item for item in self._overlays if item["id"] == overlay_id), None)
+        if item is None:
+            return
+        factor = self._bounded_resize_factor(overlay_id, factor)
+        field = "font_size" if item["type"] is OverlayType.TEXT else "logo_size"
+        item[field] = round(item[field] * factor)
+        self._select_overlay_by_id(overlay_id)
+        self._select_overlay(self.overlay_list.currentRow())
+        self._refresh_batch_readiness()
+        self.statusBar().showMessage("ปรับขนาดแล้ว — ค่านี้ใช้กับ Preview, Settings และ Export")
+
     def _select_overlay(self, _row: int) -> None:
         item = self._selected_model()
         self._updating_properties = True
@@ -2216,7 +2258,8 @@ class MainWindow(QMainWindow):
             self._set_color_button(item["color"])
         self._sync_property_controls(item)
         self._updating_properties = False
-        self._refresh_preview()
+        if not getattr(self, "_selecting_preview", False):
+            self._refresh_preview()
 
     def _sync_property_controls(self, item: dict[str, Any] | None) -> None:
         has_item = item is not None
@@ -2644,6 +2687,8 @@ class MainWindow(QMainWindow):
                 graphic.setPos(x, y)
                 graphic.setSelected(item["id"] == selected_id)
                 self._scene.addItem(graphic)
+                handle = OverlayResizeHandle(graphic, item["id"], self)
+                handle.setVisible(item["id"] == selected_id)
             elif item["asset_path"]:
                 logo = QPixmap(item["asset_path"])
                 if not logo.isNull():
@@ -2665,6 +2710,8 @@ class MainWindow(QMainWindow):
                     graphic.setPos(x, y)
                     graphic.setSelected(item["id"] == selected_id)
                     self._scene.addItem(graphic)
+                    handle = OverlayResizeHandle(graphic, item["id"], self)
+                    handle.setVisible(item["id"] == selected_id)
 
     def _preview_position(
         self,
