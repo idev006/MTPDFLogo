@@ -9,8 +9,12 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from mtpdflogo.application.positioning import resolve_overlay_top_left
-from mtpdflogo.domain.models import OverlayType
-from mtpdflogo.infrastructure.pdf.overlay_service import PdfOverlaySpec, _requires_explicit_font
+from mtpdflogo.domain.models import OverlayType, PositionMode
+from mtpdflogo.infrastructure.pdf.overlay_service import (
+    PdfOverlaySpec,
+    _requires_explicit_font,
+    render_physical_layer,
+)
 
 
 def apply_image_overlays(
@@ -30,7 +34,15 @@ def apply_image_overlays(
     with Image.open(source) as source_image:
         base = ImageOps.exif_transpose(source_image).convert("RGBA")
         for spec in active:
-            if spec.overlay_type is OverlayType.TEXT:
+            if spec.position_mode is PositionMode.FIXED_MM or spec.width_mm is not None:
+                if spec.overlay_type is OverlayType.TEXT and not spec.text:
+                    continue
+                layer, width, height = render_physical_layer(spec, base.width, 96 / 25.4)
+                layer = layer.resize(
+                    (max(1, round(width)), max(1, round(height))), Image.Resampling.LANCZOS
+                )
+                base.alpha_composite(layer, _anchor_xy(base.size, layer.size, spec))
+            elif spec.overlay_type is OverlayType.TEXT:
                 _apply_text(base, spec)
             else:
                 _apply_logo(base, spec)
@@ -116,6 +128,9 @@ def _anchor_xy(
         position_mode=spec.position_mode,
         x_percent=spec.x_percent,
         y_percent=spec.y_percent,
+        x_mm=spec.x_mm,
+        y_mm=spec.y_mm,
+        units_per_mm=96 / 25.4,
         margin=margin,
     )
     return round(x), round(y)

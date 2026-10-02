@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from mtpdflogo.application.page_ranges import parse_page_ranges
+from mtpdflogo.config.overlay_preset import normalize_mm_settings
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 
@@ -65,6 +66,7 @@ def overlays_to_specs(
     for item in overlays:
         asset_path = str(item.get("asset_path", "")).strip()
         font_name = str(item.get("font", "")).strip()
+        mm_settings = normalize_mm_settings(item)
         specs.append(
             PdfOverlaySpec(
                 overlay_type=OverlayType(item["type"]),
@@ -73,6 +75,11 @@ def overlays_to_specs(
                 position_mode=PositionMode(item.get("position_mode", PositionMode.PRESET)),
                 x_percent=float(item.get("x_percent", 50.0)),
                 y_percent=float(item.get("y_percent", 50.0)),
+                x_mm=mm_settings["x_mm"],
+                y_mm=mm_settings["y_mm"],
+                width_mm=(
+                    mm_settings["logo_width_mm"] if mm_settings["size_mode"] == "mm" else None
+                ),
                 asset_path=Path(asset_path) if asset_path else None,
                 font_size=float(item.get("font_size", 32)),
                 font_path=font_path_resolver(font_name) if font_name else None,

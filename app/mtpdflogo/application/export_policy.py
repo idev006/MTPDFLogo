@@ -15,6 +15,7 @@ from mtpdflogo.application.batch import (
     output_is_inside_input,
     validate_jobs,
 )
+from mtpdflogo.application.physical_preflight import validate_physical_source
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 
 
@@ -99,6 +100,11 @@ def preflight_batch_export(
             "Output Folder เขียนไม่ได้",
             f"ไม่สามารถเขียนไฟล์ทดสอบใน Output Folder ได้:\n{write_error}",
         )
+    try:
+        for source, _ in jobs:
+            validate_physical_source(source, specs, page_text_rule)
+    except (ValueError, OSError, RuntimeError) as error:
+        return BatchPreflightResult(False, "ตรวจสอบพิกัดมิลลิเมตรไม่ผ่าน", str(error))
     current_settings_fingerprint = settings_fingerprint(specs, page_text_rule)
     manifest_path = output_root / ".mtpdflogo-batch-status.json"
     output_conflicts = output_conflict_issues(
@@ -135,6 +141,9 @@ def settings_fingerprint(
                 "position_mode": str(spec.position_mode),
                 "x_percent": spec.x_percent,
                 "y_percent": spec.y_percent,
+                "x_mm": spec.x_mm,
+                "y_mm": spec.y_mm,
+                "width_mm": spec.width_mm,
                 "text": spec.text,
                 "asset_path": str(spec.asset_path) if spec.asset_path else None,
                 "asset_stat": file_fingerprint(spec.asset_path),

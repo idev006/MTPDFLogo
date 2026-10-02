@@ -94,7 +94,11 @@ from mtpdflogo.config import (
     save_preferences,
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
+from mtpdflogo.infrastructure.pdf.overlay_service import (
+    PageTextRule,
+    PdfOverlaySpec,
+    render_physical_layer,
+)
 from mtpdflogo.presentation.progress_delegate import ProgressDelegate
 from mtpdflogo.presentation.qt_export_worker import ExportWorker
 from mtpdflogo.presentation.resize_handle import OverlayResizeHandle
@@ -1141,7 +1145,30 @@ class MainWindow(QMainWindow):
             self.position.addItem(label, value)
         self.position_mode = QComboBox()
         self.position_mode.addItem("ตำแหน่งมาตรฐาน", PositionMode.PRESET)
-        self.position_mode.addItem("วางอิสระ", PositionMode.ABSOLUTE)
+        self.position_mode.addItem("วางอิสระ — สัดส่วน (%)", PositionMode.ABSOLUTE)
+        self.position_mode.addItem("พิกัดคงที่ (มม.)", PositionMode.FIXED_MM)
+        self.x_mm = QDoubleSpinBox()
+        self.y_mm = QDoubleSpinBox()
+        for control in (self.x_mm, self.y_mm):
+            control.setRange(0, 2000)
+            control.setDecimals(3)
+            control.setSuffix(" mm")
+            control.setToolTip("จุดกึ่งกลางรายการ วัดจากมุมซ้ายบนของหน้า")
+        self.logo_size_mode = QComboBox()
+        self.logo_size_mode.addItem("ตามความกว้างหน้า (%)", "percent")
+        self.logo_size_mode.addItem("ความกว้างคงที่ (มม.)", "mm")
+        self.logo_width_mm = QDoubleSpinBox()
+        self.logo_width_mm.setRange(0.1, 2000)
+        self.logo_width_mm.setDecimals(3)
+        self.logo_width_mm.setValue(25)
+        self.logo_width_mm.setSuffix(" mm")
+        self.fixed_position_hint = QLabel(
+            "พิกัด X/Y อ้างอิงจุดกึ่งกลางจากมุมซ้ายบน\n"
+            "PDF ใช้ระยะจริง; รูปภาพใช้สเกล 96 dpi"
+        )
+        self.fixed_position_hint.setWordWrap(True)
+        self.bounds_warning = QLabel()
+        self.bounds_warning.setWordWrap(True)
         self.x_percent = QDoubleSpinBox()
         self.x_percent.setRange(0.0, 100.0)
         self.x_percent.setDecimals(2)
@@ -1194,9 +1221,15 @@ class MainWindow(QMainWindow):
                     ("โหมดตำแหน่ง", self.position_mode),
                     ("X ของรายการนี้", self.x_percent),
                     ("Y ของรายการนี้", self.y_percent),
+                    ("X คงที่", self.x_mm),
+                    ("Y คงที่", self.y_mm),
+                    ("", self.fixed_position_hint),
                     ("", self.reset_to_preset),
                     ("ขนาด Text ของรายการนี้", self.font_size),
                     ("ขนาด Logo ของรายการนี้ (%)", self.logo_size),
+                    ("หน่วยขนาด Logo", self.logo_size_mode),
+                    ("ความกว้าง Logo", self.logo_width_mm),
+                    ("", self.bounds_warning),
                     ("หมุนรายการนี้", self.rotation),
                 ]
             ),
@@ -1218,6 +1251,10 @@ class MainWindow(QMainWindow):
         self.position_mode.currentIndexChanged.connect(self._position_mode_changed)
         self.x_percent.valueChanged.connect(self._absolute_position_changed)
         self.y_percent.valueChanged.connect(self._absolute_position_changed)
+        self.x_mm.valueChanged.connect(self._fixed_position_changed)
+        self.y_mm.valueChanged.connect(self._fixed_position_changed)
+        self.logo_size_mode.currentIndexChanged.connect(self._logo_size_mode_changed)
+        self.logo_width_mm.valueChanged.connect(self._property_changed)
         self.font.currentIndexChanged.connect(self._property_changed)
         self.font_size.valueChanged.connect(self._property_changed)
         self.logo_size.valueChanged.connect(self._property_changed)
@@ -1930,6 +1967,7 @@ class MainWindow(QMainWindow):
                 else Position.MIDDLE_CENTER
             ),
             "x_percent": 50.0, "y_percent": 50.0,
+            "x_mm": 0.0, "y_mm": 0.0, "size_mode": "percent", "logo_width_mm": 25.0,
             "opacity": 100, "rotation": 0, "font_size": 32,
             "font": self.font.currentText(), "logo_size": 12,
             "text": "ข้อความตัวอย่าง" if overlay_type is OverlayType.TEXT else "",
@@ -2204,9 +2242,14 @@ class MainWindow(QMainWindow):
         if item is None:
             return 1.0
         is_text = item["type"] is OverlayType.TEXT
-        control = self.font_size if is_text else self.logo_size
-        value = item["font_size" if is_text else "logo_size"]
-        size = max(control.minimum(), min(control.maximum(), round(value * factor)))
+        physical = not is_text and item.get("size_mode") == "mm"
+        control = self.font_size if is_text else (
+            self.logo_width_mm if physical else self.logo_size
+        )
+        value = item["font_size" if is_text else "logo_width_mm" if physical else "logo_size"]
+        size = max(control.minimum(), min(
+            control.maximum(), round(value * factor, 3 if physical else 0)
+        ))
         return size / value
 
     def _commit_overlay_resize(self, overlay_id: str, factor: float) -> None:
@@ -2214,8 +2257,13 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         factor = self._bounded_resize_factor(overlay_id, factor)
-        field = "font_size" if item["type"] is OverlayType.TEXT else "logo_size"
-        item[field] = round(item[field] * factor)
+        field = "font_size" if item["type"] is OverlayType.TEXT else (
+            "logo_width_mm" if item.get("size_mode") == "mm" else "logo_size"
+        )
+        item[field] = (
+            round(item[field] * factor, 3) if field == "logo_width_mm"
+            else round(item[field] * factor)
+        )
         self._select_overlay_by_id(overlay_id)
         self._select_overlay(self.overlay_list.currentRow())
         self._refresh_batch_readiness()
@@ -2247,6 +2295,12 @@ class MainWindow(QMainWindow):
             )
             self.x_percent.setValue(float(item.get("x_percent", 50.0)))
             self.y_percent.setValue(float(item.get("y_percent", 50.0)))
+            self.x_mm.setValue(float(item.get("x_mm", 0)))
+            self.y_mm.setValue(float(item.get("y_mm", 0)))
+            self.logo_size_mode.setCurrentIndex(
+                self.logo_size_mode.findData(item.get("size_mode", "percent"))
+            )
+            self.logo_width_mm.setValue(float(item.get("logo_width_mm", 25)))
             if item["font"] and self.font.findText(item["font"]) < 0:
                 self.font.addItem(item["font"])
             self.font.setCurrentText(item["font"])
@@ -2271,10 +2325,15 @@ class MainWindow(QMainWindow):
             item.get("position_mode", PositionMode.PRESET) if item else PositionMode.PRESET
         )
         is_absolute = has_item and position_mode is PositionMode.ABSOLUTE
+        is_fixed = has_item and position_mode is PositionMode.FIXED_MM
         self.position_mode.setEnabled(has_item)
         self.x_percent.setEnabled(is_absolute)
         self.y_percent.setEnabled(is_absolute)
-        self.reset_to_preset.setEnabled(is_absolute)
+        self.reset_to_preset.setEnabled(is_absolute or is_fixed)
+        self.x_mm.setEnabled(is_fixed)
+        self.y_mm.setEnabled(is_fixed)
+        self.logo_size_mode.setEnabled(is_logo)
+        self.logo_width_mm.setEnabled(is_logo)
         self.text_input.setEnabled(is_text)
         self.font.setEnabled(is_text)
         self.font_size.setEnabled(is_text)
@@ -2286,7 +2345,12 @@ class MainWindow(QMainWindow):
             (self.text_input, is_text), (self.font, is_text),
             (self.font_size, is_text), (self.color_button, is_text),
             (self.logo_button, is_logo), (self.logo_value, is_logo),
-            (self.logo_size, is_logo),
+            (self.logo_size, is_logo and item.get("size_mode", "percent") == "percent"),
+            (self.logo_size_mode, is_logo),
+            (self.logo_width_mm, is_logo and item.get("size_mode") == "mm"),
+            (self.x_percent, is_absolute), (self.y_percent, is_absolute),
+            (self.x_mm, is_fixed), (self.y_mm, is_fixed),
+            (self.fixed_position_hint, is_fixed or (is_logo and item.get("size_mode") == "mm")),
         ):
             for form in self.properties_tabs.findChildren(QFormLayout):
                 if form.indexOf(control) >= 0:
@@ -2313,6 +2377,7 @@ class MainWindow(QMainWindow):
             font=self.font.currentText(), font_size=self.font_size.value(),
             logo_size=self.logo_size.value(), opacity=self.opacity.value(),
             rotation=self.rotation.value(),
+            logo_width_mm=self.logo_width_mm.value(),
         )
         self.opacity_label.setText(f"{self.opacity.value()}%")
         self._refresh_preview()
@@ -2339,11 +2404,62 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         mode = self.position_mode.currentData()
+        if mode == PositionMode.FIXED_MM or (
+            mode == PositionMode.ABSOLUTE
+            and item.get("position_mode") == PositionMode.FIXED_MM
+        ):
+            graphic = next((g for g in self._scene.items()
+                            if getattr(g, "overlay_id", None) == item["id"]
+                            and isinstance(g, (DraggableTextItem, DraggablePixmapItem))), None)
+            if graphic is not None:
+                center = graphic.mapToScene(graphic.boundingRect().center())
+                units = self._preview_units_per_mm(self._scene.sceneRect().width())
+                item["x_mm"] = round(max(0, center.x() / units), 3)
+                item["y_mm"] = round(max(0, center.y() / units), 3)
+                item["x_percent"], item["y_percent"] = point_to_percent(
+                    x=center.x(), y=center.y(),
+                    page_width=self._scene.sceneRect().width(),
+                    page_height=self._scene.sceneRect().height(),
+                )
         item["position_mode"] = PositionMode(str(mode))
         item.setdefault("x_percent", self.x_percent.value())
         item.setdefault("y_percent", self.y_percent.value())
-        self._sync_property_controls(item)
+        self._select_overlay(self.overlay_list.currentRow())
+
+    def _preview_units_per_mm(self, preview_width: float) -> float:
+        if self._image_path is not None:
+            return 96 / 25.4
+        if self._document is not None and self._document.page_count:
+            return preview_width / self._document[self._preview_page_index].rect.width * 72 / 25.4
+        return 72 / 25.4
+
+    def _fixed_position_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None:
+            return
+        item["x_mm"], item["y_mm"] = self.x_mm.value(), self.y_mm.value()
         self._refresh_preview()
+
+    def _logo_size_mode_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None or item["type"] is not OverlayType.IMAGE:
+            return
+        mode = self.logo_size_mode.currentData()
+        width = self._scene.sceneRect().width()
+        if width > 0 and (self._document is not None or self._image_path is not None):
+            units = self._preview_units_per_mm(width)
+            if mode == "mm":
+                item["logo_width_mm"] = round(width * item["logo_size"] / 100 / units, 3)
+            else:
+                item["logo_size"] = max(1, min(100, round(
+                    item.get("logo_width_mm", 25) * units / width * 100
+                )))
+        item["size_mode"] = mode
+        self._select_overlay(self.overlay_list.currentRow())
 
     def _absolute_position_changed(self, _value: Any = None) -> None:
         if self._updating_properties:
@@ -2673,8 +2789,42 @@ class MainWindow(QMainWindow):
     def _draw_preview_overlays(self, preview_width: int, preview_height: int) -> None:
         selected = self._selected_model()
         selected_id = selected["id"] if selected else None
+        self.bounds_warning.clear()
         for item in self._overlays:
-            if item["type"] is OverlayType.TEXT:
+            if (item.get("position_mode") == PositionMode.FIXED_MM
+                    or item.get("size_mode") == "mm"):
+                try:
+                    spec = overlays_to_specs([item], self._font_path)[0]
+                    units = self._preview_units_per_mm(preview_width)
+                    native_units = 96 / 25.4 if self._image_path is not None else 72 / 25.4
+                    scale = units / native_units
+                    layer, width, height = render_physical_layer(
+                        spec, preview_width / scale, native_units
+                    )
+                    image = QImage(
+                        layer.tobytes(), layer.width, layer.height, layer.width * 4,
+                        QImage.Format.Format_RGBA8888,
+                    ).copy()
+                    pixmap = QPixmap.fromImage(image).scaled(
+                        max(1, round(width * scale)), max(1, round(height * scale)),
+                        Qt.AspectRatioMode.IgnoreAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    graphic = DraggablePixmapItem(pixmap, item["id"], self)
+                    x, y = self._preview_position(
+                        item, pixmap.width(), pixmap.height(), preview_width, preview_height
+                    )
+                    graphic.setPos(x, y)
+                    self._scene.addItem(graphic)
+                    graphic.setSelected(item["id"] == selected_id)
+                    handle = OverlayResizeHandle(graphic, item["id"], self)
+                    handle.setVisible(item["id"] == selected_id)
+                    if (x < 0 or y < 0 or x + pixmap.width() > preview_width
+                            or y + pixmap.height() > preview_height):
+                        self.bounds_warning.setText("ลายน้ำเกินขอบหน้า — ปรับ X/Y หรือขนาดก่อนเริ่มงาน")
+                except (ValueError, OSError) as error:
+                    self.bounds_warning.setText(str(error))
+            elif item["type"] is OverlayType.TEXT:
                 graphic = DraggableTextItem(item["text"], item["id"], self)
                 graphic.setDefaultTextColor(QColor(item["color"]))
                 graphic.setFont(self._preview_font(item["font"], item["font_size"]))
@@ -2731,6 +2881,10 @@ class MainWindow(QMainWindow):
             position_mode=item.get("position_mode", PositionMode.PRESET),
             x_percent=float(item.get("x_percent", 50.0)),
             y_percent=float(item.get("y_percent", 50.0)),
+            x_mm=float(item.get("x_mm", 0.0)),
+            y_mm=float(item.get("y_mm", 0.0)),
+            units_per_mm=self._preview_units_per_mm(page_width),
+            check_bounds=False,
             margin=margin,
         )
 
@@ -2744,6 +2898,13 @@ class MainWindow(QMainWindow):
             return
         item = next((overlay for overlay in self._overlays if overlay["id"] == overlay_id), None)
         if item is None:
+            return
+        if item.get("position_mode") == PositionMode.FIXED_MM:
+            center = graphic.mapToScene(graphic.boundingRect().center())
+            units = self._preview_units_per_mm(scene_rect.width())
+            item["x_mm"] = round(max(0, min(2000, center.x() / units)), 3)
+            item["y_mm"] = round(max(0, min(2000, center.y() / units)), 3)
+            QTimer.singleShot(0, lambda: self._select_overlay(self.overlay_list.currentRow()))
             return
         bounding = graphic.boundingRect()
         center_x = graphic.pos().x() + bounding.width() / 2 - scene_rect.x()

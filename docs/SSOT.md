@@ -14,7 +14,7 @@
 - ผู้ใช้เพิ่ม Text, Logo หรือทั้งสองชนิดได้หลายรายการ
 - แต่ละรายการตั้งค่าแยกกันได้อย่างอิสระ
 - ผู้ใช้ต้องวาง Text/Logo ได้ 2 วิธี: เลือกตำแหน่งมาตรฐานจาก dropdown 9 จุด หรือ drag-and-drop วางอิสระบน preview
-- ตำแหน่งแบบ drag-and-drop ต้องเก็บเป็น absolute percent ของหน้า (`x_percent`, `y_percent`) ไม่ใช่ screen pixel
+- ตำแหน่งแบบ drag-and-drop เก็บเป็น percent (`absolute`) หรือมิลลิเมตร (`fixed_mm`) ตามโหมดที่เลือก ไม่ใช่ screen pixel
 - ผู้ใช้ต้องเลือกหน้า preview ของ PDF ได้ก่อนวาง Text/Logo เพื่อให้การวางตำแหน่งอ้างอิงหน้าที่ต้องการ ไม่จำกัดหน้าแรก
 - Preview ต้องซูมเข้า/ออกและ Fit ได้ โดยการ redraw จากการแก้ Text/Logo ต้องไม่รีเซ็ต zoom
 - UI ต้องมีทางเลือกที่ชัดเจนสำหรับเพิ่ม Text+Logo พร้อมกันใน workflow เดียว
@@ -138,7 +138,11 @@
 - Overlay model คือ `OverlayItem` หนึ่งรายการต่อหนึ่ง Text หรือ Logo
 - Overlay preset เป็นไฟล์ TOML มี schema version และเก็บค่าของ Text/Logo แต่ละรายการแยกกัน
 - Position ใช้ preset 9 จุด พร้อม offset/margin
-- Position mode มี 2 แบบ: `preset` สำหรับ dropdown และ `absolute` สำหรับ drag-and-drop/free position
+- Position mode มี 3 แบบ: `preset` สำหรับ dropdown, `absolute` แบบสัดส่วนหน้า และ `fixed_mm` แบบระยะจริง
+- `fixed_mm` ใช้ `x_mm`/`y_mm` เป็นจุดกึ่งกลางจากมุมซ้ายบนของหน้าที่มองเห็น (รวม CropBox/rotation); PDF ใช้ 72/25.4 pt/mm และรูปภาพใช้ convention 96/25.4 px/mm
+- ขนาดโลโก้เลือกแยกจากตำแหน่งได้: `size_mode=percent` หรือ `mm` (`logo_width_mm`); text ใช้ point size ในโหมด physical
+- โหมด physical ใช้ raster renderer เดียวกันสำหรับ preview/export; ตรวจขอบทุกหน้าที่ผ่าน filter ก่อน Batch และ engine ปฏิเสธก่อนเขียนไฟล์หากเกินขอบ ไม่ย้ายพิกัดเอง
+- Preset schema 3 อ่าน schema 1/2 ได้โดยไม่เปลี่ยนตำแหน่งเดิม; fingerprint รวมพิกัด/ขนาด mm เพื่อไม่ resume ผลลัพธ์จากค่าคนละชุด
 - Absolute position ใช้ anchor center ใน MVP และต้องคำนวณจากขนาดหน้าจริงของ PDF/Image แต่ละหน้า
 - การคลิกเลือก overlay บน preview โดยไม่ได้ลาก ต้องไม่เปลี่ยน `preset` เป็น `absolute`
 - ตำแหน่งต้องคำนวณใหม่จาก `page.rect` ของแต่ละหน้า ห้ามใช้ขนาดหน้าคงที่

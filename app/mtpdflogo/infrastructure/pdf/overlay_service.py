@@ -36,6 +36,9 @@ class PdfOverlaySpec:
     margin_pt: float = 18.0
     enabled: bool = True
     z_index: int = 0
+    x_mm: float | None = None
+    y_mm: float | None = None
+    width_mm: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +186,8 @@ def _anchor_rect(
         position_mode=spec.position_mode,
         x_percent=spec.x_percent,
         y_percent=spec.y_percent,
+        x_mm=spec.x_mm,
+        y_mm=spec.y_mm,
         margin=margin,
     )
     horizontal = page_rect.x0 + x
@@ -202,6 +207,15 @@ def _apply_text_as_image(
     """Render text to a transparent image so Thai/Unicode glyphs survive PDF export."""
     if not spec.text:
         return
+    image, width, height = render_text_layer(spec)
+    stream = BytesIO()
+    image.save(stream, format="PNG")
+    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
+    page.insert_image(rect, stream=stream.getvalue(), overlay=True)
+
+
+def render_text_layer(spec: PdfOverlaySpec) -> tuple[Image.Image, float, float]:
+    """Transparent text raster and point dimensions shared with physical preview."""
     scale = 3
     if _requires_explicit_font(spec.text) and (
         spec.font_path is None or not spec.font_path.exists()
@@ -235,12 +249,37 @@ def _apply_text_as_image(
         spacing=4 * scale,
     )
     image = image.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
-    stream = BytesIO()
-    image.save(stream, format="PNG")
-    width = image.width / scale
-    height = image.height / scale
-    rect = _anchor_rect(page_rect, spec, spec.position, width, height, spec.margin_pt)
-    page.insert_image(rect, stream=stream.getvalue(), overlay=True)
+    return image, image.width / scale, image.height / scale
+
+
+def render_physical_layer(
+    spec: PdfOverlaySpec, page_width: float, units_per_mm: float = 72 / 25.4,
+) -> tuple[Image.Image, float, float]:
+    """Render physical overlays; image documents use an explicit 96-dpi convention."""
+    if spec.overlay_type is OverlayType.TEXT:
+        image, width, height = render_text_layer(spec)
+        factor = units_per_mm / (72 / 25.4)
+        return image, width * factor, height * factor
+    if spec.asset_path is None:
+        raise FileNotFoundError("Logo asset not found")
+    with Image.open(spec.asset_path) as source:
+        image = source.convert("RGBA")
+    width = (
+        spec.width_mm * units_per_mm if spec.width_mm is not None
+        else page_width * spec.width_percent / 100
+    )
+    if not 0 < width <= 2000 * units_per_mm:
+        raise ValueError("Invalid logo width")
+    # Render at 3 pixels per document unit without changing the physical extent.
+    raster_width = max(1, round(width * 3))
+    factor = width / raster_width
+    image = image.resize(
+        (raster_width, max(1, round(raster_width * image.height / image.width))),
+        Image.Resampling.LANCZOS,
+    )
+    image.putalpha(image.getchannel("A").point(lambda value: round(value * spec.opacity)))
+    image = image.rotate(-spec.rotation, expand=True, resample=Image.Resampling.BICUBIC)
+    return image, image.width * factor, image.height * factor
 
 
 def _apply_image(
@@ -290,6 +329,7 @@ def apply_overlays(
     active = sorted((item for item in overlays if item.enabled), key=lambda item: item.z_index)
     with fitz.open(source) as document:
         image_xrefs: dict[tuple[Path, float, int], int] = {}
+        physical_cache = {}
         total_pages = document.page_count
         for page_number, page in enumerate(document, 1):
             if cancel_check and cancel_check():
@@ -301,7 +341,25 @@ def apply_overlays(
             )
             if should_apply:
                 for spec in active:
-                    if spec.overlay_type is OverlayType.TEXT:
+                    if spec.position_mode is PositionMode.FIXED_MM or spec.width_mm is not None:
+                        if spec.overlay_type is OverlayType.TEXT and not spec.text:
+                            continue
+                        key = (spec, page_rect.width, page.rotation)
+                        if key not in physical_cache:
+                            image, width, height = render_physical_layer(spec, page_rect.width)
+                            stream = BytesIO()
+                            image.save(stream, format="PNG")
+                            physical_cache[key] = (stream.getvalue(), width, height, 0)
+                        data, width, height, xref = physical_cache[key]
+                        rect = _anchor_rect(
+                            page_rect, spec, spec.position, width, height, spec.margin_pt
+                        )
+                        xref = page.insert_image(
+                            rect * page.derotation_matrix, stream=data, xref=xref,
+                            rotate=page.rotation, overlay=True,
+                        )
+                        physical_cache[key] = (data, width, height, xref)
+                    elif spec.overlay_type is OverlayType.TEXT:
                         _apply_text(page, page_rect, spec)
                     else:
                         _apply_image(page, page_rect, spec, image_xrefs)

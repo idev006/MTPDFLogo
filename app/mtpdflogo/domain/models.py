@@ -14,6 +14,7 @@ class OverlayType(StrEnum):
 class PositionMode(StrEnum):
     PRESET = "preset"
     ABSOLUTE = "absolute"
+    FIXED_MM = "fixed_mm"
 
 
 class Position(StrEnum):
@@ -44,8 +45,13 @@ class OverlayItem:
     x_offset_pt: float = 0.0
     y_offset_pt: float = 0.0
     z_index: int = 0
+    x_mm: float | None = None
+    y_mm: float | None = None
 
     def __post_init__(self) -> None:
+        if self.position_mode is PositionMode.FIXED_MM:
+            if any(value is None or not 0 <= value <= 2000 for value in (self.x_mm, self.y_mm)):
+                raise ValueError("fixed_mm requires finite x_mm and y_mm between 0 and 2000")
         if not 0.0 <= self.opacity <= 1.0:
             raise ValueError("opacity must be between 0.0 and 1.0")
         if self.margin_pt < 0:

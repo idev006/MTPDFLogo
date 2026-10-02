@@ -16,8 +16,24 @@ def resolve_overlay_top_left(
     x_percent: float | None = None,
     y_percent: float | None = None,
     margin: float = 18.0,
+    x_mm: float | None = None,
+    y_mm: float | None = None,
+    units_per_mm: float = 72 / 25.4,
+    check_bounds: bool = True,
 ) -> tuple[float, float]:
     """Resolve an overlay's top-left coordinate on a page-like rectangle."""
+    if position_mode is PositionMode.FIXED_MM:
+        if any(value is None or not 0 <= value <= 2000 for value in (x_mm, y_mm)):
+            raise ValueError("fixed_mm requires finite x_mm and y_mm between 0 and 2000")
+        x = x_mm * units_per_mm - overlay_width / 2
+        y = y_mm * units_per_mm - overlay_height / 2
+        if check_bounds and (
+            x < -0.01 or y < -0.01
+            or x + overlay_width > page_width + 0.01
+            or y + overlay_height > page_height + 0.01
+        ):
+            raise ValueError("Fixed-mm overlay exceeds page bounds; adjust X/Y or size")
+        return x, y
     if position_mode is PositionMode.ABSOLUTE and x_percent is not None and y_percent is not None:
         center_x = page_width * clamp_percent(x_percent) / 100
         center_y = page_height * clamp_percent(y_percent) / 100
