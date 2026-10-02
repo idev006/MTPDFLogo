@@ -131,6 +131,7 @@ def _anchor_xy(
         x_mm=spec.x_mm,
         y_mm=spec.y_mm,
         units_per_mm=96 / 25.4,
+        anchor_mode=spec.anchor_mode,
         margin=margin,
     )
     return round(x), round(y)

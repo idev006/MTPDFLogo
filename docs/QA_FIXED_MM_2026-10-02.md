@@ -2,8 +2,8 @@
 
 ## Result
 
-- Windows, project Python 3.12.4, Qt offscreen: **221 passed, 3 skipped** in 38.55s.
-- Branch-aware coverage: **81.59%**, above the 75% project gate.
+- Windows, project Python 3.12.4, Qt offscreen: **226 passed, 3 skipped** in 33.55s.
+- Branch-aware coverage: **81.14%**, above the 75% project gate.
 - `python -m ruff check app tests`: passed.
 - `git diff --check`: passed.
 - Installer smoke tests intentionally skipped: no installer rebuilt in this slice.
@@ -47,3 +47,12 @@ not a claim that the user's existing logo/settings were exported and visually ap
 
 Keep percent mode for proportional watermarks. Fixed mm does not follow a keyword if the
 underlying form layout moves. Existing ZIP installers are unchanged and do not contain this slice.
+
+## Top-left anchor correction
+
+After user clarification, schema 4 makes the visible page's top-left `(0,0)` and stores X/Y for
+the overlay's top-left by default. The UI names this reference explicitly. Dragging and resizing
+write and preserve this same anchor. Schema-3 fixed-mm presets load with `anchor_mode=center`,
+then save as schema 4, so their visual position is not shifted silently. Tests additionally verify
+top-left placement on Legal/A4, rotated/cropped PDFs, 96-dpi images, settings migration, preview,
+mouse-size commit, and fingerprint invalidation.

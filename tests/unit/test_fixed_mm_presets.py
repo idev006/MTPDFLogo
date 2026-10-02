@@ -1,4 +1,4 @@
-"""Schema 3 physical-unit settings and legacy preset compatibility."""
+"""Schema 4 physical-unit anchors and legacy preset compatibility."""
 
 import math
 import tomllib
@@ -24,6 +24,7 @@ def test_fixed_mm_round_trip(tmp_path: Path) -> None:
         "y_mm": 2000.0,
         "size_mode": "mm",
         "logo_width_mm": 0.1,
+        "anchor_mode": "top_left",
         "asset_path": "logo.png",
     }
     page_filter = {
@@ -35,7 +36,7 @@ def test_fixed_mm_round_trip(tmp_path: Path) -> None:
         "page_ranges": "1-3",
     }
     save_overlay_preset(path, [overlay], page_filter)
-    assert tomllib.loads(path.read_text(encoding="utf-8"))["schema_version"] == 3
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["schema_version"] == 4
     loaded = load_overlay_preset(path)
     for key, value in overlay.items():
         assert loaded[0][key] == value
@@ -47,7 +48,7 @@ def test_fixed_mm_round_trip(tmp_path: Path) -> None:
     assert (spec.x_mm, spec.y_mm, spec.width_mm) == (12.3456789, 2000.0, 0.1)
 
 
-@pytest.mark.parametrize("schema", [1, 2, 3])
+@pytest.mark.parametrize("schema", [1, 2, 3, 4])
 @pytest.mark.parametrize("mode", [None, "preset", "absolute"])
 def test_legacy_modes_and_defaults_are_preserved(
     tmp_path: Path, schema: int, mode: str | None
@@ -66,6 +67,7 @@ def test_legacy_modes_and_defaults_are_preserved(
     assert (item["x_percent"], item["y_percent"], item["logo_size"]) == (31.25, 68.5, 18)
     assert (item["x_mm"], item["y_mm"], item["logo_width_mm"]) == (0.0, 0.0, 25.0)
     assert item["size_mode"] == "percent"
+    assert item["anchor_mode"] == ("center" if schema <= 3 else "top_left")
     spec = overlays_to_specs(loaded, lambda _: None)[0]
     assert spec.position_mode is PositionMode(mode or "preset")
     assert (spec.x_percent, spec.y_percent, spec.width_percent) == (31.25, 68.5, 18.0)
@@ -158,7 +160,7 @@ def test_unknown_size_mode_defaults_to_percent(tmp_path: Path) -> None:
     assert load_overlay_preset(path)[0]["size_mode"] == "percent"
 
 
-@pytest.mark.parametrize("schema", [0, 4])
+@pytest.mark.parametrize("schema", [0, 5])
 def test_unsupported_schema_is_rejected(tmp_path: Path, schema: int) -> None:
     path = tmp_path / "unsupported.toml"
     path.write_text(f"schema_version = {schema}\n", encoding="utf-8")

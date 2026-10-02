@@ -2,7 +2,7 @@
 
 ## Implemented contract (SSOT: docs/SSOT.md)
 
-- Add `fixed_mm` positioning. X/Y are the overlay center measured from the visible page's top-left, in millimeters. Existing `preset` and percent-based `absolute` remain unchanged.
+- Add `fixed_mm` positioning. Origin `(0,0)` is the visible page's top-left and X/Y default to the overlay's top-left, in millimeters. Existing `preset` and percent-based `absolute` remain unchanged. Schema-3 center anchors migrate explicitly.
 - Logo size has an independent percent/mm choice. Text retains point size. Use 72 PDF points per inch. Raster-image physical mode uses a documented 96 dpi coordinate convention.
 - Mode switching converts the current preview geometry to avoid jumping. Mouse movement and corner resizing update the same persisted fields used by export.
 - Fixed coordinates must not silently clamp into the page; report an out-of-bounds error. Preflight should warn before processing applicable pages; engine remains authoritative before output write.

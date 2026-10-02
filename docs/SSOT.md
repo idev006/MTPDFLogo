@@ -139,10 +139,11 @@
 - Overlay preset เป็นไฟล์ TOML มี schema version และเก็บค่าของ Text/Logo แต่ละรายการแยกกัน
 - Position ใช้ preset 9 จุด พร้อม offset/margin
 - Position mode มี 3 แบบ: `preset` สำหรับ dropdown, `absolute` แบบสัดส่วนหน้า และ `fixed_mm` แบบระยะจริง
-- `fixed_mm` ใช้ `x_mm`/`y_mm` เป็นจุดกึ่งกลางจากมุมซ้ายบนของหน้าที่มองเห็น (รวม CropBox/rotation); PDF ใช้ 72/25.4 pt/mm และรูปภาพใช้ convention 96/25.4 px/mm
+- `fixed_mm` ใช้ origin `(0,0)` ที่มุมซ้ายบนของหน้าที่มองเห็น (รวม CropBox/rotation), X ไปขวาและ Y ลงล่าง; ค่าเริ่มต้นยึดมุมซ้ายบนของ overlay และ PDF ใช้ 72/25.4 pt/mm ส่วนรูปภาพใช้ convention 96/25.4 px/mm
+- `anchor_mode=top_left` คือ contract หลัก; `center` เก็บไว้สำหรับ migration ของ Settings schema 3 เพื่อรักษาตำแหน่งเดิมโดยไม่เลื่อนเงียบ ๆ
 - ขนาดโลโก้เลือกแยกจากตำแหน่งได้: `size_mode=percent` หรือ `mm` (`logo_width_mm`); text ใช้ point size ในโหมด physical
 - โหมด physical ใช้ raster renderer เดียวกันสำหรับ preview/export; ตรวจขอบทุกหน้าที่ผ่าน filter ก่อน Batch และ engine ปฏิเสธก่อนเขียนไฟล์หากเกินขอบ ไม่ย้ายพิกัดเอง
-- Preset schema 3 อ่าน schema 1/2 ได้โดยไม่เปลี่ยนตำแหน่งเดิม; fingerprint รวมพิกัด/ขนาด mm เพื่อไม่ resume ผลลัพธ์จากค่าคนละชุด
+- Preset schema 4 อ่าน schema 1/2/3 ได้โดยไม่เปลี่ยนตำแหน่งเดิม; fingerprint รวม anchor, พิกัด และขนาด mm เพื่อไม่ resume ผลลัพธ์จากค่าคนละชุด
 - Absolute position ใช้ anchor center ใน MVP และต้องคำนวณจากขนาดหน้าจริงของ PDF/Image แต่ละหน้า
 - การคลิกเลือก overlay บน preview โดยไม่ได้ลาก ต้องไม่เปลี่ยน `preset` เป็น `absolute`
 - ตำแหน่งต้องคำนวณใหม่จาก `page.rect` ของแต่ละหน้า ห้ามใช้ขนาดหน้าคงที่

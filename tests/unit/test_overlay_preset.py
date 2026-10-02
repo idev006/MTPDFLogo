@@ -59,7 +59,10 @@ def test_overlay_preset_round_trip_as_toml(tmp_path: Path) -> None:
     )
 
     assert load_overlay_preset(path) == [
-        {**item, "x_mm": 0.0, "y_mm": 0.0, "size_mode": "percent", "logo_width_mm": 25.0}
+        {
+            **item, "x_mm": 0.0, "y_mm": 0.0, "size_mode": "percent",
+            "logo_width_mm": 25.0, "anchor_mode": "top_left",
+        }
         for item in overlays
     ]
     assert load_page_filter_options(path) == {

@@ -1146,14 +1146,17 @@ class MainWindow(QMainWindow):
         self.position_mode = QComboBox()
         self.position_mode.addItem("ตำแหน่งมาตรฐาน", PositionMode.PRESET)
         self.position_mode.addItem("วางอิสระ — สัดส่วน (%)", PositionMode.ABSOLUTE)
-        self.position_mode.addItem("พิกัดคงที่ (มม.)", PositionMode.FIXED_MM)
+        self.position_mode.addItem("จากมุมซ้ายบนหน้า (มม.)", PositionMode.FIXED_MM)
+        self.anchor_mode = QComboBox()
+        self.anchor_mode.addItem("มุมซ้ายบนของรายการ", "top_left")
+        self.anchor_mode.addItem("จุดกึ่งกลาง (Settings เดิม)", "center")
         self.x_mm = QDoubleSpinBox()
         self.y_mm = QDoubleSpinBox()
         for control in (self.x_mm, self.y_mm):
             control.setRange(0, 2000)
             control.setDecimals(3)
             control.setSuffix(" mm")
-            control.setToolTip("จุดกึ่งกลางรายการ วัดจากมุมซ้ายบนของหน้า")
+            control.setToolTip("วัดจากมุมซ้ายบน (0,0) ของหน้า PDF/รูปภาพ")
         self.logo_size_mode = QComboBox()
         self.logo_size_mode.addItem("ตามความกว้างหน้า (%)", "percent")
         self.logo_size_mode.addItem("ความกว้างคงที่ (มม.)", "mm")
@@ -1163,8 +1166,8 @@ class MainWindow(QMainWindow):
         self.logo_width_mm.setValue(25)
         self.logo_width_mm.setSuffix(" mm")
         self.fixed_position_hint = QLabel(
-            "พิกัด X/Y อ้างอิงจุดกึ่งกลางจากมุมซ้ายบน\n"
-            "PDF ใช้ระยะจริง; รูปภาพใช้สเกล 96 dpi"
+            "จุด (0,0) คือมุมซ้ายบนของหน้า\n"
+            "X ไปทางขวา, Y ลงด้านล่าง; PDF ใช้ระยะจริง"
         )
         self.fixed_position_hint.setWordWrap(True)
         self.bounds_warning = QLabel()
@@ -1219,6 +1222,7 @@ class MainWindow(QMainWindow):
                 [
                     ("ตำแหน่งของรายการนี้", self.position),
                     ("โหมดตำแหน่ง", self.position_mode),
+                    ("จุดยึดของรายการ", self.anchor_mode),
                     ("X ของรายการนี้", self.x_percent),
                     ("Y ของรายการนี้", self.y_percent),
                     ("X คงที่", self.x_mm),
@@ -1249,6 +1253,7 @@ class MainWindow(QMainWindow):
         self.text_input.textChanged.connect(self._property_changed)
         self.position.currentIndexChanged.connect(self._preset_position_changed)
         self.position_mode.currentIndexChanged.connect(self._position_mode_changed)
+        self.anchor_mode.currentIndexChanged.connect(self._anchor_mode_changed)
         self.x_percent.valueChanged.connect(self._absolute_position_changed)
         self.y_percent.valueChanged.connect(self._absolute_position_changed)
         self.x_mm.valueChanged.connect(self._fixed_position_changed)
@@ -1967,7 +1972,8 @@ class MainWindow(QMainWindow):
                 else Position.MIDDLE_CENTER
             ),
             "x_percent": 50.0, "y_percent": 50.0,
-            "x_mm": 0.0, "y_mm": 0.0, "size_mode": "percent", "logo_width_mm": 25.0,
+            "x_mm": 0.0, "y_mm": 0.0, "anchor_mode": "top_left",
+            "size_mode": "percent", "logo_width_mm": 25.0,
             "opacity": 100, "rotation": 0, "font_size": 32,
             "font": self.font.currentText(), "logo_size": 12,
             "text": "ข้อความตัวอย่าง" if overlay_type is OverlayType.TEXT else "",
@@ -2252,6 +2258,15 @@ class MainWindow(QMainWindow):
         ))
         return size / value
 
+    def _resize_anchor_scene(self, overlay_id: str, graphic: Any) -> Any:
+        """Return the visual point that must stay fixed during mouse resize."""
+        item = next((item for item in self._overlays if item["id"] == overlay_id), None)
+        if (item is not None
+                and item.get("position_mode") is PositionMode.FIXED_MM
+                and item.get("anchor_mode", "top_left") == "top_left"):
+            return graphic.sceneBoundingRect().topLeft()
+        return graphic.mapToScene(graphic.boundingRect().center())
+
     def _commit_overlay_resize(self, overlay_id: str, factor: float) -> None:
         item = next((item for item in self._overlays if item["id"] == overlay_id), None)
         if item is None:
@@ -2297,6 +2312,9 @@ class MainWindow(QMainWindow):
             self.y_percent.setValue(float(item.get("y_percent", 50.0)))
             self.x_mm.setValue(float(item.get("x_mm", 0)))
             self.y_mm.setValue(float(item.get("y_mm", 0)))
+            self.anchor_mode.setCurrentIndex(
+                self.anchor_mode.findData(item.get("anchor_mode", "top_left"))
+            )
             self.logo_size_mode.setCurrentIndex(
                 self.logo_size_mode.findData(item.get("size_mode", "percent"))
             )
@@ -2326,12 +2344,29 @@ class MainWindow(QMainWindow):
         )
         is_absolute = has_item and position_mode is PositionMode.ABSOLUTE
         is_fixed = has_item and position_mode is PositionMode.FIXED_MM
+        if is_absolute:
+            self.fixed_position_hint.setText(
+                "โหมดนี้อิงเปอร์เซ็นต์ของทั้งหน้า: A4 และ Legal จะห่างจากขอบไม่เท่ากัน"
+            )
+        elif is_fixed and item.get("anchor_mode", "top_left") == "top_left":
+            self.fixed_position_hint.setText(
+                "จุด (0,0) คือมุมซ้ายบนของหน้าและของรายการ; X ไปขวา, Y ลงล่าง"
+            )
+        elif is_fixed:
+            self.fixed_position_hint.setText(
+                "Settings เดิม: X/Y วัดถึงจุดกึ่งกลางรายการจากมุมซ้ายบนของหน้า"
+            )
+        elif is_logo and item.get("size_mode") == "mm":
+            self.fixed_position_hint.setText(
+                "ขนาด Logo คงที่แล้ว แต่ตำแหน่งยังใช้โหมดที่เลือกด้านบน"
+            )
         self.position_mode.setEnabled(has_item)
         self.x_percent.setEnabled(is_absolute)
         self.y_percent.setEnabled(is_absolute)
         self.reset_to_preset.setEnabled(is_absolute or is_fixed)
         self.x_mm.setEnabled(is_fixed)
         self.y_mm.setEnabled(is_fixed)
+        self.anchor_mode.setEnabled(is_fixed)
         self.logo_size_mode.setEnabled(is_logo)
         self.logo_width_mm.setEnabled(is_logo)
         self.text_input.setEnabled(is_text)
@@ -2350,7 +2385,9 @@ class MainWindow(QMainWindow):
             (self.logo_width_mm, is_logo and item.get("size_mode") == "mm"),
             (self.x_percent, is_absolute), (self.y_percent, is_absolute),
             (self.x_mm, is_fixed), (self.y_mm, is_fixed),
-            (self.fixed_position_hint, is_fixed or (is_logo and item.get("size_mode") == "mm")),
+            (self.anchor_mode, is_fixed),
+            (self.fixed_position_hint, is_absolute or is_fixed
+             or (is_logo and item.get("size_mode") == "mm")),
         ):
             for form in self.properties_tabs.findChildren(QFormLayout):
                 if form.indexOf(control) >= 0:
@@ -2412,10 +2449,16 @@ class MainWindow(QMainWindow):
                             if getattr(g, "overlay_id", None) == item["id"]
                             and isinstance(g, (DraggableTextItem, DraggablePixmapItem))), None)
             if graphic is not None:
-                center = graphic.mapToScene(graphic.boundingRect().center())
+                anchor_mode = item.get("anchor_mode", "top_left")
+                reference = (
+                    graphic.sceneBoundingRect().topLeft()
+                    if anchor_mode == "top_left"
+                    else graphic.mapToScene(graphic.boundingRect().center())
+                )
                 units = self._preview_units_per_mm(self._scene.sceneRect().width())
-                item["x_mm"] = round(max(0, center.x() / units), 3)
-                item["y_mm"] = round(max(0, center.y() / units), 3)
+                item["x_mm"] = round(max(0, reference.x() / units), 3)
+                item["y_mm"] = round(max(0, reference.y() / units), 3)
+                center = graphic.mapToScene(graphic.boundingRect().center())
                 item["x_percent"], item["y_percent"] = point_to_percent(
                     x=center.x(), y=center.y(),
                     page_width=self._scene.sceneRect().width(),
@@ -2424,6 +2467,30 @@ class MainWindow(QMainWindow):
         item["position_mode"] = PositionMode(str(mode))
         item.setdefault("x_percent", self.x_percent.value())
         item.setdefault("y_percent", self.y_percent.value())
+        self._select_overlay(self.overlay_list.currentRow())
+
+    def _anchor_mode_changed(self, _value: Any = None) -> None:
+        if self._updating_properties:
+            return
+        item = self._selected_model()
+        if item is None or item.get("position_mode") is not PositionMode.FIXED_MM:
+            return
+        graphic = next((
+            candidate for candidate in self._scene.items()
+            if getattr(candidate, "overlay_id", None) == item["id"]
+            and isinstance(candidate, (DraggableTextItem, DraggablePixmapItem))
+        ), None)
+        anchor_mode = str(self.anchor_mode.currentData())
+        if graphic is not None:
+            reference = (
+                graphic.sceneBoundingRect().topLeft()
+                if anchor_mode == "top_left"
+                else graphic.mapToScene(graphic.boundingRect().center())
+            )
+            units = self._preview_units_per_mm(self._scene.sceneRect().width())
+            item["x_mm"] = round(max(0, reference.x() / units), 3)
+            item["y_mm"] = round(max(0, reference.y() / units), 3)
+        item["anchor_mode"] = anchor_mode
         self._select_overlay(self.overlay_list.currentRow())
 
     def _preview_units_per_mm(self, preview_width: float) -> float:
@@ -2885,6 +2952,7 @@ class MainWindow(QMainWindow):
             y_mm=float(item.get("y_mm", 0.0)),
             units_per_mm=self._preview_units_per_mm(page_width),
             check_bounds=False,
+            anchor_mode=item.get("anchor_mode", "top_left"),
             margin=margin,
         )
 
@@ -2900,10 +2968,14 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         if item.get("position_mode") == PositionMode.FIXED_MM:
-            center = graphic.mapToScene(graphic.boundingRect().center())
+            reference = (
+                graphic.sceneBoundingRect().topLeft()
+                if item.get("anchor_mode", "top_left") == "top_left"
+                else graphic.mapToScene(graphic.boundingRect().center())
+            )
             units = self._preview_units_per_mm(scene_rect.width())
-            item["x_mm"] = round(max(0, min(2000, center.x() / units)), 3)
-            item["y_mm"] = round(max(0, min(2000, center.y() / units)), 3)
+            item["x_mm"] = round(max(0, min(2000, reference.x() / units)), 3)
+            item["y_mm"] = round(max(0, min(2000, reference.y() / units)), 3)
             QTimer.singleShot(0, lambda: self._select_overlay(self.overlay_list.currentRow()))
             return
         bounding = graphic.boundingRect()

@@ -11,16 +11,23 @@ from typing import Any
 
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 
-PRESET_SCHEMA_VERSION = 3
+PRESET_SCHEMA_VERSION = 4
 
 
-def normalize_mm_settings(item: dict[str, Any]) -> dict[str, Any]:
+def normalize_mm_settings(
+    item: dict[str, Any], *, default_anchor: str = "top_left"
+) -> dict[str, Any]:
     """Normalize optional physical units without changing legacy positioning."""
     return {
         "x_mm": _bounded_mm(item.get("x_mm"), 0.0, 0.0),
         "y_mm": _bounded_mm(item.get("y_mm"), 0.0, 0.0),
         "size_mode": "mm" if item.get("size_mode") == "mm" else "percent",
         "logo_width_mm": _bounded_mm(item.get("logo_width_mm"), 25.0, 0.1),
+        "anchor_mode": (
+            item.get("anchor_mode")
+            if item.get("anchor_mode") in {"top_left", "center"}
+            else default_anchor
+        ),
     }
 
 
@@ -79,6 +86,7 @@ def save_overlay_preset(
                 f"y_mm = {mm_settings['y_mm']!r}",
                 f"size_mode = {_quote(mm_settings['size_mode'])}",
                 f"logo_width_mm = {mm_settings['logo_width_mm']!r}",
+                f"anchor_mode = {_quote(mm_settings['anchor_mode'])}",
                 f"text = {_quote(item.get('text', ''))}",
                 f"asset_path = {_quote(item.get('asset_path', ''))}",
                 f"font = {_quote(item.get('font', ''))}",
@@ -101,6 +109,7 @@ def save_overlay_preset(
 def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
     """Load text/logo overlay settings from a TOML preset file."""
     data = _load_preset_data(path)
+    schema_version = int(data.get("schema_version", 0))
     overlays: list[dict[str, Any]] = []
     for index, raw_item in enumerate(data.get("overlays", []), 1):
         overlay_type = OverlayType(str(raw_item.get("type", OverlayType.TEXT.value)))
@@ -120,7 +129,10 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
                 "position": Position(str(raw_item.get("position", default_position.value))),
                 "x_percent": _bounded_float(raw_item.get("x_percent", 50.0), 0.0, 100.0),
                 "y_percent": _bounded_float(raw_item.get("y_percent", 50.0), 0.0, 100.0),
-                **normalize_mm_settings(raw_item),
+                **normalize_mm_settings(
+                    raw_item,
+                    default_anchor="center" if schema_version <= 3 else "top_left",
+                ),
                 "opacity": _bounded_int(raw_item.get("opacity", 100), 0, 100),
                 "rotation": _bounded_int(raw_item.get("rotation", 0), -360, 360),
                 "font_size": _bounded_int(raw_item.get("font_size", 32), 6, 240),
@@ -154,7 +166,7 @@ def _load_preset_data(path: Path) -> dict[str, Any]:
     with path.open("rb") as preset_file:
         data = tomllib.load(preset_file)
     schema_version = int(data.get("schema_version", 0))
-    if schema_version not in {1, 2, PRESET_SCHEMA_VERSION}:
+    if schema_version not in {1, 2, 3, PRESET_SCHEMA_VERSION}:
         raise ValueError("unsupported overlay preset schema version")
     return data
 

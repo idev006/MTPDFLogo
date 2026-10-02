@@ -39,6 +39,7 @@ class PdfOverlaySpec:
     x_mm: float | None = None
     y_mm: float | None = None
     width_mm: float | None = None
+    anchor_mode: str = "top_left"
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +189,7 @@ def _anchor_rect(
         y_percent=spec.y_percent,
         x_mm=spec.x_mm,
         y_mm=spec.y_mm,
+        anchor_mode=spec.anchor_mode,
         margin=margin,
     )
     horizontal = page_rect.x0 + x

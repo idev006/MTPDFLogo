@@ -20,13 +20,19 @@ def resolve_overlay_top_left(
     y_mm: float | None = None,
     units_per_mm: float = 72 / 25.4,
     check_bounds: bool = True,
+    anchor_mode: str = "top_left",
 ) -> tuple[float, float]:
     """Resolve an overlay's top-left coordinate on a page-like rectangle."""
     if position_mode is PositionMode.FIXED_MM:
         if any(value is None or not 0 <= value <= 2000 for value in (x_mm, y_mm)):
             raise ValueError("fixed_mm requires finite x_mm and y_mm between 0 and 2000")
-        x = x_mm * units_per_mm - overlay_width / 2
-        y = y_mm * units_per_mm - overlay_height / 2
+        if anchor_mode not in {"top_left", "center"}:
+            raise ValueError("anchor_mode must be top_left or center")
+        x = x_mm * units_per_mm
+        y = y_mm * units_per_mm
+        if anchor_mode == "center":
+            x -= overlay_width / 2
+            y -= overlay_height / 2
         if check_bounds and (
             x < -0.01 or y < -0.01
             or x + overlay_width > page_width + 0.01

@@ -47,11 +47,14 @@ class OverlayItem:
     z_index: int = 0
     x_mm: float | None = None
     y_mm: float | None = None
+    anchor_mode: str = "top_left"
 
     def __post_init__(self) -> None:
         if self.position_mode is PositionMode.FIXED_MM:
             if any(value is None or not 0 <= value <= 2000 for value in (self.x_mm, self.y_mm)):
                 raise ValueError("fixed_mm requires finite x_mm and y_mm between 0 and 2000")
+            if self.anchor_mode not in {"top_left", "center"}:
+                raise ValueError("anchor_mode must be top_left or center")
         if not 0.0 <= self.opacity <= 1.0:
             raise ValueError("opacity must be between 0.0 and 1.0")
         if self.margin_pt < 0:

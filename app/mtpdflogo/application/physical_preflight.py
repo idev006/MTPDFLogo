@@ -35,6 +35,7 @@ def validate_physical_source(
                     page_width=width, page_height=height, overlay_width=w, overlay_height=h,
                     position=spec.position, position_mode=spec.position_mode,
                     x_mm=spec.x_mm, y_mm=spec.y_mm, units_per_mm=units,
+                    anchor_mode=spec.anchor_mode,
                 )
             except ValueError as error:
                 raise ValueError(f"{source.name}, page {page}: {error}") from error

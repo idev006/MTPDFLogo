@@ -80,6 +80,7 @@ def overlays_to_specs(
                 width_mm=(
                     mm_settings["logo_width_mm"] if mm_settings["size_mode"] == "mm" else None
                 ),
+                anchor_mode=mm_settings["anchor_mode"],
                 asset_path=Path(asset_path) if asset_path else None,
                 font_size=float(item.get("font_size", 32)),
                 font_path=font_path_resolver(font_name) if font_name else None,

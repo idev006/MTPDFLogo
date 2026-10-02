@@ -26,6 +26,7 @@ class OverlayResizeHandle(QGraphicsRectItem):
 
     def mousePressEvent(self, event):
         self.center = self.graphic.mapToScene(self.graphic.boundingRect().center())
+        self.anchor = self.owner._resize_anchor_scene(self.overlay_id, self.graphic)
         offset = event.scenePos() - self.center
         self.distance = max(1.0, hypot(offset.x(), offset.y()))
         self.factor = 1.0
@@ -37,8 +38,8 @@ class OverlayResizeHandle(QGraphicsRectItem):
         factor = hypot(offset.x(), offset.y()) / self.distance
         self.factor = self.owner._bounded_resize_factor(self.overlay_id, factor)
         self.graphic.setScale(self.factor)
-        current = self.graphic.mapToScene(self.graphic.boundingRect().center())
-        self.graphic.setPos(self.graphic.pos() + self.center - current)
+        current = self.owner._resize_anchor_scene(self.overlay_id, self.graphic)
+        self.graphic.setPos(self.graphic.pos() + self.anchor - current)
         event.accept()
 
     def mouseReleaseEvent(self, event):

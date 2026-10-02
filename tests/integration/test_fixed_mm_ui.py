@@ -40,6 +40,16 @@ def test_mm_conversion_drag_resize_roundtrip(window, qtbot, tmp_path):
     window.x_mm.setValue(100)
     window.y_mm.setValue(70)
     g = graphic(window)
+    units = window._preview_units_per_mm(window._scene.sceneRect().width())
+    assert g.sceneBoundingRect().left() == pytest.approx(100 * units, abs=1)
+    assert g.sceneBoundingRect().top() == pytest.approx(70 * units, abs=1)
+    anchored = g.sceneBoundingRect().topLeft()
+    window._commit_overlay_resize(item["id"], 1.25)
+    resized = graphic(window).sceneBoundingRect().topLeft()
+    assert resized.x() == pytest.approx(anchored.x(), abs=1)
+    assert resized.y() == pytest.approx(anchored.y(), abs=1)
+    old_width = item["logo_width_mm"]
+    g = graphic(window)
     g.moveBy(10, 20)
     window._preview_item_dropped(item["id"], g)
     qtbot.wait(10)
@@ -72,3 +82,12 @@ def test_text_and_logo_settings_remain_independent(window):
     assert window._overlays[0] == before
     assert window._to_specs()[1].x_mm == 70
     assert len([g for g in window._scene.items() if isinstance(g, DraggablePixmapItem)]) == 2
+
+
+def test_ui_explains_percent_risk_and_top_left_origin(window):
+    window.position_mode.setCurrentIndex(window.position_mode.findData(PositionMode.ABSOLUTE))
+    assert "A4" in window.fixed_position_hint.text()
+    assert "Legal" in window.fixed_position_hint.text()
+    window.position_mode.setCurrentIndex(window.position_mode.findData(PositionMode.FIXED_MM))
+    assert window.anchor_mode.currentData() == "top_left"
+    assert "(0,0)" in window.fixed_position_hint.text()

@@ -144,6 +144,7 @@ def settings_fingerprint(
                 "x_mm": spec.x_mm,
                 "y_mm": spec.y_mm,
                 "width_mm": spec.width_mm,
+                "anchor_mode": spec.anchor_mode,
                 "text": spec.text,
                 "asset_path": str(spec.asset_path) if spec.asset_path else None,
                 "asset_stat": file_fingerprint(spec.asset_path),
