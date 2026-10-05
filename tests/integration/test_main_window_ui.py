@@ -4,6 +4,7 @@ import fitz
 import pytest
 from mtpdflogo.application.export_policy import output_conflict_issues
 from mtpdflogo.application.positioning import point_to_percent
+from mtpdflogo.config import UserPreferences, save_preferences
 from mtpdflogo.config.overlay_preset import load_page_filter_options, save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.presentation.main_window import DraggableTextItem, MainWindow
@@ -186,7 +187,7 @@ def test_dragging_overlay_uses_current_preview_page_geometry(qtbot, tmp_path) ->
     dragged = QGraphicsTextItem("dragged")
     dragged.setPos(115, 240)
 
-    window._preview_item_dropped("overlay-1", dragged)
+    window._preview_item_dropped(window._overlays[0]["id"], dragged)
 
     assert window._overlays[0]["position_mode"] is PositionMode.ABSOLUTE
     assert window._overlays[0]["x_percent"] == pytest.approx(50, abs=10)
@@ -557,7 +558,7 @@ def test_preview_drop_updates_only_dragged_item_to_absolute(qtbot) -> None:
         page_height=400,
     )
 
-    window._preview_item_dropped("overlay-1", dragged)
+    window._preview_item_dropped(window._overlays[0]["id"], dragged)
 
     assert window._overlays[0]["position_mode"] is PositionMode.ABSOLUTE
     assert window._overlays[0]["x_percent"] == round(expected_x, 2)
@@ -570,14 +571,14 @@ def test_clicking_preview_item_without_moving_keeps_preset_position(qtbot) -> No
     window = MainWindow()
     qtbot.addWidget(window)
     window._append_overlay(OverlayType.TEXT)
-    graphic = DraggableTextItem("dragged", "overlay-1", window)
+    graphic = DraggableTextItem("dragged", window._overlays[0]["id"], window)
     graphic.setPos(40, 40)
 
     assert window._overlays[0]["position_mode"] is PositionMode.PRESET
 
     graphic._press_pos = graphic.pos()
     if (graphic.pos() - graphic._press_pos).manhattanLength() >= 2:
-        window._preview_item_dropped("overlay-1", graphic)
+        window._preview_item_dropped(window._overlays[0]["id"], graphic)
 
     assert window._overlays[0]["position_mode"] is PositionMode.PRESET
 
@@ -1604,3 +1605,95 @@ def test_input_folder_load_preserves_source_structure(qtbot, tmp_path) -> None:
     assert str(output / "root-watermask.png") in outputs
     assert str(output / "customer" / "nested-watermask.png") in outputs
     assert window.start_batch_action.isEnabled()
+
+
+def test_delete_middle_then_add_keeps_unique_overlay_identity(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    for _ in range(3):
+        window._append_overlay(OverlayType.TEXT)
+    original_ids = [item["id"] for item in window._overlays]
+
+    window.overlay_list.setCurrentRow(1)
+    window._delete_selected()
+    window._append_overlay(OverlayType.TEXT)
+
+    ids = [item["id"] for item in window._overlays]
+    assert len(ids) == len(set(ids)) == 3
+    assert original_ids[0] in ids and original_ids[2] in ids
+    assert window.overlay_list.currentItem().data(Qt.ItemDataRole.UserRole) == ids[-1]
+    before = [dict(item) for item in window._overlays[:-1]]
+    window.text_input.setText("new item only")
+    assert window._overlays[-1]["text"] == "new item only"
+    assert window._overlays[:-1] == before
+
+
+def test_loading_duplicate_preset_ids_repairs_list_identity(qtbot, tmp_path) -> None:
+    path = tmp_path / "duplicate-ids.toml"
+    path.write_text(
+        "\n".join([
+            "schema_version = 4",
+            "[[overlays]]", 'id = "duplicate"', 'type = "text"', 'text = "one"',
+            "[[overlays]]", 'id = "duplicate"', 'type = "text"', 'text = "two"',
+        ]),
+        encoding="utf-8",
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window._load_overlay_settings_file(path)
+
+    model_ids = [item["id"] for item in window._overlays]
+    list_ids = [
+        window.overlay_list.item(row).data(Qt.ItemDataRole.UserRole)
+        for row in range(window.overlay_list.count())
+    ]
+    assert len(model_ids) == len(set(model_ids)) == 2
+    assert list_ids == model_ids
+    assert model_ids[0] == "duplicate"
+
+
+def test_loading_new_folder_replaces_queue_but_preserves_overlays(qtbot, tmp_path) -> None:
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    output = tmp_path / "output"
+    for folder in (first_folder, second_folder, output):
+        folder.mkdir()
+    Image.new("RGB", (20, 20), "white").save(first_folder / "old.png")
+    Image.new("RGB", (20, 20), "white").save(second_folder / "new.png")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._append_overlay(OverlayType.TEXT)
+    overlay_id = window._overlays[0]["id"]
+    window.batch_output_folder.setText(str(output))
+
+    window.batch_input_folder.setText(str(first_folder))
+    window._load_input_folder_files()
+    assert window.queue_table.item(0, 1).text() == "old.png"
+
+    window.batch_input_folder.setText(str(second_folder))
+    window._load_input_folder_files()
+
+    assert window.queue_table.rowCount() == 1
+    assert window.queue_table.item(0, 1).text() == "new.png"
+    assert window.queue_table.item(0, 4).text() == "0%"
+    assert window.queue_table.item(0, 5).text() == "Pending"
+    assert [item["id"] for item in window._overlays] == [overlay_id]
+
+
+def test_startup_shows_remembered_input_and_output_folders(qtbot, tmp_path) -> None:
+    input_folder = tmp_path / "remembered-input"
+    output_folder = tmp_path / "remembered-output"
+    input_folder.mkdir()
+    output_folder.mkdir()
+    save_preferences(UserPreferences(
+        pdf_folder=input_folder,
+        output_folder=output_folder,
+    ))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window.batch_input_folder.text() == str(input_folder)
+    assert window.batch_output_folder.text() == str(output_folder)
+    assert window.queue_table.rowCount() == 0

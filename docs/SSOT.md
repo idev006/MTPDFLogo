@@ -136,6 +136,7 @@
 - Progress ในคิวใช้ native delegate พร้อมเปอร์เซ็นต์/จำนวนหน้าจาก worker events และค่าตัวเลขใน item model ไม่สร้าง QProgressBar widget ต่อแถว
 
 - Overlay model คือ `OverlayItem` หนึ่งรายการต่อหนึ่ง Text หรือ Logo
+- Overlay ID เป็น UUID-backed string ที่ไม่ซ้ำและแยกจากเลขลำดับแสดงผล; การโหลด preset ต้องซ่อม ID ที่ว่าง/ซ้ำก่อนสร้าง list/preview
 - Overlay preset เป็นไฟล์ TOML มี schema version และเก็บค่าของ Text/Logo แต่ละรายการแยกกัน
 - Position ใช้ preset 9 จุด พร้อม offset/margin
 - Position mode มี 3 แบบ: `preset` สำหรับ dropdown, `absolute` แบบสัดส่วนหน้า และ `fixed_mm` แบบระยะจริง

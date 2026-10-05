@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from time import monotonic
 from typing import Any
-from uuid import uuid4
 
 import fitz
 from PySide6.QtCore import QByteArray, QRect, Qt, QThread, QTimer, QUrl, Signal
@@ -73,6 +72,10 @@ from mtpdflogo.application.batch import (
 from mtpdflogo.application.export_policy import (
     evaluate_batch_readiness,
     preflight_batch_export,
+)
+from mtpdflogo.application.overlay_identity import (
+    ensure_unique_overlay_ids,
+    new_overlay_id,
 )
 from mtpdflogo.application.overlay_mapper import (
     has_effective_overlay,
@@ -796,7 +799,9 @@ class MainWindow(QMainWindow):
         container_layout.setSpacing(8)
         input_group = QGroupBox("Input — ไฟล์ต้นทาง")
         input_row = QVBoxLayout(input_group)
-        self.batch_input_folder = QLineEdit()
+        self.batch_input_folder = QLineEdit(
+            str(self._preferences.pdf_folder) if self._preferences.pdf_folder else ""
+        )
         self.batch_input_folder.setMinimumWidth(280)
         self.batch_input_folder.setPlaceholderText("เลือกหรือวาง Folder ต้นทาง")
         browse_input = QPushButton("เลือก Folder...")
@@ -1039,7 +1044,10 @@ class MainWindow(QMainWindow):
     def _duplicate_overlay(self) -> None:
         item = self._selected_model()
         if item is not None:
-            copied = dict(item, id=f"overlay-{uuid4().hex}")
+            copied = dict(
+                item,
+                id=new_overlay_id(overlay["id"] for overlay in self._overlays),
+            )
             self._overlays.append(copied)
             self._rebuild_overlay_list()
             self._select_overlay_by_id(copied["id"])
@@ -1964,7 +1972,8 @@ class MainWindow(QMainWindow):
     def _append_overlay(self, overlay_type: OverlayType, asset_path: str = "") -> None:
         number = len(self._overlays) + 1
         item = {
-            "id": f"overlay-{number}", "type": overlay_type,
+            "id": new_overlay_id(overlay["id"] for overlay in self._overlays),
+            "type": overlay_type,
             "position_mode": PositionMode.PRESET,
             "position": (
                 Position.TOP_RIGHT
@@ -2099,7 +2108,7 @@ class MainWindow(QMainWindow):
 
     def _load_overlay_settings_file(self, source: Path) -> bool:
         try:
-            loaded = load_overlay_preset(source)
+            loaded = ensure_unique_overlay_ids(load_overlay_preset(source))
             page_filter = load_page_filter_options(source)
         except Exception as error:
             QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
@@ -2204,6 +2213,9 @@ class MainWindow(QMainWindow):
         )
 
     def _rebuild_overlay_list(self) -> None:
+        repaired = ensure_unique_overlay_ids(self._overlays)
+        if [item["id"] for item in repaired] != [item.get("id") for item in self._overlays]:
+            self._overlays = repaired
         self.overlay_list.clear()
         for index, item in enumerate(self._overlays, 1):
             label = "Text" if item["type"] is OverlayType.TEXT else "Logo"
@@ -2774,7 +2786,7 @@ class MainWindow(QMainWindow):
             return
         item_id = self.overlay_list.item(row).data(Qt.ItemDataRole.UserRole)
         self._overlays = [item for item in self._overlays if item["id"] != item_id]
-        self.overlay_list.takeItem(row)
+        self._rebuild_overlay_list()
         self._refresh_preview()
         self._update_pipeline()
 
