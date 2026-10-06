@@ -1,4 +1,4 @@
-"""TOML persistence for multi-rule overlay projects (schema version 5)."""
+"""TOML persistence for multi-rule overlay projects (schema version 6)."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ from typing import Any
 
 from mtpdflogo.config.overlay_preset import normalize_mm_settings
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.domain.rules import RuleScope
+from mtpdflogo.domain.rules import ConditionLogic, RuleScope
 
-RULE_PRESET_SCHEMA_VERSION = 5
+RULE_PRESET_SCHEMA_VERSION = 6
 
 
 def is_rule_preset(path: Path) -> bool:
     with path.open("rb") as preset_file:
-        return int(tomllib.load(preset_file).get("schema_version", 0)) == 5
+        return int(tomllib.load(preset_file).get("schema_version", 0)) in {5, 6}
 
 
 def save_rule_preset(path: Path, groups: list[dict[str, Any]]) -> None:
@@ -53,11 +53,15 @@ def save_rule_preset(path: Path, groups: list[dict[str, Any]]) -> None:
                     f"name = {_quote(branch.get('name', ''))}",
                     f"enabled = {_bool(branch.get('enabled', True))}",
                     f"is_else = {_bool(branch.get('is_else', False))}",
+                    "condition_logic = "
+                    f"{_quote(branch.get('condition_logic', ConditionLogic.ALL.value))}",
                     f"min_occurrences = {max(0, int(branch.get('min_occurrences', 0)))}",
                     f"max_occurrences = {persisted_maximum}",
                     "",
                 ]
             )
+            for condition in branch.get("conditions", []):
+                lines.extend(_condition_lines(condition))
             for index, overlay in enumerate(branch.get("overlays", []), 1):
                 lines.extend(_overlay_lines(overlay, index))
     with tempfile.NamedTemporaryFile(
@@ -71,18 +75,53 @@ def save_rule_preset(path: Path, groups: list[dict[str, Any]]) -> None:
 def load_rule_preset(path: Path) -> list[dict[str, Any]]:
     with path.open("rb") as preset_file:
         data = tomllib.load(preset_file)
-    if int(data.get("schema_version", 0)) != RULE_PRESET_SCHEMA_VERSION:
+    schema_version = int(data.get("schema_version", 0))
+    if schema_version not in {5, RULE_PRESET_SCHEMA_VERSION}:
         raise ValueError("not a multi-rule preset")
     groups: list[dict[str, Any]] = []
     for group_index, raw_group in enumerate(data.get("rule_groups", []), 1):
         branches: list[dict[str, Any]] = []
         for branch_index, raw_branch in enumerate(raw_group.get("branches", []), 1):
+            is_else = bool(raw_branch.get("is_else", False))
+            conditions = [
+                _load_condition(condition, condition_index)
+                for condition_index, condition in enumerate(
+                    raw_branch.get("conditions", []), 1
+                )
+            ]
+            if schema_version == 5 and not is_else:
+                conditions = [
+                    {
+                        "id": f"condition-{group_index}-{branch_index}-1",
+                        "name": "เงื่อนไข 1",
+                        "enabled": True,
+                        "keyword": str(raw_group.get("keyword", "")),
+                        "use_regex": bool(raw_group.get("use_regex", False)),
+                        "case_sensitive": bool(raw_group.get("case_sensitive", False)),
+                        "negate": False,
+                        "scope": str(raw_group.get("scope", RuleScope.PAGE.value)),
+                        "min_occurrences": _int(
+                            raw_branch.get("min_occurrences", 0), 0, 1_000_000
+                        ),
+                        "max_occurrences": (
+                            None
+                            if int(raw_branch.get("max_occurrences", 0)) < 0
+                            else _int(
+                                raw_branch.get("max_occurrences", 0), 0, 1_000_000
+                            )
+                        ),
+                    }
+                ]
             branches.append(
                 {
                     "id": str(raw_branch.get("id") or f"branch-{group_index}-{branch_index}"),
                     "name": str(raw_branch.get("name") or f"เงื่อนไข {branch_index}"),
                     "enabled": bool(raw_branch.get("enabled", True)),
-                    "is_else": bool(raw_branch.get("is_else", False)),
+                    "is_else": is_else,
+                    "condition_logic": str(
+                        raw_branch.get("condition_logic", ConditionLogic.ALL.value)
+                    ),
+                    "conditions": conditions,
                     "min_occurrences": _int(raw_branch.get("min_occurrences", 0), 0, 1_000_000),
                     "max_occurrences": (
                         None
@@ -109,6 +148,43 @@ def load_rule_preset(path: Path) -> list[dict[str, Any]]:
             }
         )
     return groups
+
+
+def _condition_lines(condition: dict[str, Any]) -> list[str]:
+    maximum = condition.get("max_occurrences")
+    persisted_maximum = -1 if maximum is None else max(0, int(maximum))
+    return [
+        "[[rule_groups.branches.conditions]]",
+        f"id = {_quote(condition.get('id', ''))}",
+        f"name = {_quote(condition.get('name', ''))}",
+        f"enabled = {_bool(condition.get('enabled', True))}",
+        f"keyword = {_quote(condition.get('keyword', ''))}",
+        f"use_regex = {_bool(condition.get('use_regex', False))}",
+        f"case_sensitive = {_bool(condition.get('case_sensitive', False))}",
+        f"negate = {_bool(condition.get('negate', False))}",
+        f"scope = {_quote(condition.get('scope', RuleScope.PAGE.value))}",
+        f"min_occurrences = {max(0, int(condition.get('min_occurrences', 0)))}",
+        f"max_occurrences = {persisted_maximum}",
+        "",
+    ]
+
+
+def _load_condition(raw: dict[str, Any], index: int) -> dict[str, Any]:
+    maximum = int(raw.get("max_occurrences", 0))
+    return {
+        "id": str(raw.get("id") or f"condition-{index}"),
+        "name": str(raw.get("name") or f"เงื่อนไข {index}"),
+        "enabled": bool(raw.get("enabled", True)),
+        "keyword": str(raw.get("keyword", "")),
+        "use_regex": bool(raw.get("use_regex", False)),
+        "case_sensitive": bool(raw.get("case_sensitive", False)),
+        "negate": bool(raw.get("negate", False)),
+        "scope": str(raw.get("scope", RuleScope.PAGE.value)),
+        "min_occurrences": _int(raw.get("min_occurrences", 0), 0, 1_000_000),
+        "max_occurrences": (
+            None if maximum < 0 else _int(maximum, 0, 1_000_000)
+        ),
+    }
 
 
 def _overlay_lines(item: dict[str, Any], index: int) -> list[str]:

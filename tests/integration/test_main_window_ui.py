@@ -4,6 +4,7 @@ import fitz
 import pytest
 from mtpdflogo.application.export_policy import output_conflict_issues
 from mtpdflogo.application.positioning import point_to_percent
+from mtpdflogo.application.rule_pipeline import evaluate_rule_group
 from mtpdflogo.config import UserPreferences, save_preferences
 from mtpdflogo.config.overlay_preset import load_page_filter_options, save_overlay_preset
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
@@ -1719,6 +1720,48 @@ def test_rule_branches_own_independent_layer_collections(qtbot) -> None:
     assert second_branch["overlays"][0]["text"] == "FIVE"
     assert second_branch["overlays"][0]["id"] != first_overlay_id
     assert window._overlays is second_branch["overlays"]
+
+
+def test_rule_branch_supports_n_conditions_with_and_or_controls(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._add_rule_group()
+
+    window.rule_keyword.setText("amount")
+    window.branch_min.setValue(3)
+    window.branch_max.setValue(3)
+    window._rule_controls_changed()
+    window._add_rule_condition()
+    window.rule_keyword.setText("approved")
+    window.branch_min.setValue(1)
+    window.branch_max.setValue(1)
+    window._rule_controls_changed()
+
+    branch = window._active_rule_branch()
+    assert branch is not None
+    assert len(branch["conditions"]) == 2
+    assert window.condition_list.count() == 2
+    model = window._rule_models()[0]
+    assert evaluate_rule_group(
+        model,
+        page_text="amount amount amount approved",
+        page_number=1,
+    ).branch_id == branch["id"]
+    assert evaluate_rule_group(
+        model,
+        page_text="amount amount amount",
+        page_number=1,
+    ).branch_id is None
+
+    window.branch_condition_logic.setCurrentIndex(
+        window.branch_condition_logic.findData("any")
+    )
+    model = window._rule_models()[0]
+    assert evaluate_rule_group(
+        model,
+        page_text="approved",
+        page_number=1,
+    ).branch_id == branch["id"]
 
 
 def test_layer_eye_and_lock_are_persisted_in_rule_preset(qtbot, tmp_path) -> None:

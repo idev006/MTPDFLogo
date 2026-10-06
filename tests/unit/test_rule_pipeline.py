@@ -5,7 +5,13 @@ from mtpdflogo.application.rule_pipeline import (
     resolve_page_overlays,
     validate_rule_groups,
 )
-from mtpdflogo.domain.rules import RuleBranch, RuleGroup, RuleScope
+from mtpdflogo.domain.rules import (
+    ConditionLogic,
+    RuleBranch,
+    RuleCondition,
+    RuleGroup,
+    RuleScope,
+)
 
 
 def _group(*branches: RuleBranch, **changes) -> RuleGroup:
@@ -126,3 +132,113 @@ def test_layer_state_is_independent_per_branch() -> None:
 
     assert original.overlays[0]["enabled"] is True
     assert changed.overlays[0]["enabled"] is False
+
+
+def test_compound_all_requires_every_enabled_condition() -> None:
+    branch = RuleBranch(
+        "approved-three",
+        "Amount 3 and approved",
+        ("layer",),
+        conditions=(
+            RuleCondition("amount", "Amount", "amount", 3, 3),
+            RuleCondition("approved", "Approved", "approved", 1, None),
+        ),
+        condition_logic=ConditionLogic.ALL,
+    )
+    group = _group(branch, RuleBranch("else", "Else", (), is_else=True))
+
+    matched = evaluate_rule_group(
+        group,
+        page_text="amount amount amount approved",
+        page_number=1,
+    )
+    fallback = evaluate_rule_group(
+        group,
+        page_text="amount amount amount",
+        page_number=1,
+    )
+
+    assert matched.branch_id == branch.id
+    assert [result.occurrence_count for result in matched.condition_results] == [3, 1]
+    assert fallback.branch_id == "else"
+
+
+def test_compound_any_and_not_support_business_exclusions() -> None:
+    branch = RuleBranch(
+        "urgent",
+        "Urgent but not cancelled",
+        ("urgent-layer",),
+        conditions=(
+            RuleCondition("urgent", "Urgent", "urgent", 1, None),
+            RuleCondition("not-cancelled", "Not cancelled", "cancelled", 1, None, negate=True),
+        ),
+        condition_logic=ConditionLogic.ALL,
+    )
+    alternative = replace(
+        branch,
+        id="any",
+        condition_logic=ConditionLogic.ANY,
+    )
+
+    assert evaluate_rule_group(
+        _group(branch), page_text="urgent", page_number=1
+    ).branch_id == "urgent"
+    assert evaluate_rule_group(
+        _group(branch), page_text="urgent cancelled", page_number=1
+    ).branch_id is None
+    assert evaluate_rule_group(
+        _group(alternative), page_text="ordinary", page_number=1
+    ).branch_id == "any"
+
+
+def test_disabled_conditions_are_ignored_but_empty_active_stack_never_matches() -> None:
+    branch = RuleBranch(
+        "branch",
+        "Branch",
+        ("layer",),
+        conditions=(
+            RuleCondition("disabled", "Disabled", "missing", 1, 1, enabled=False),
+            RuleCondition("active", "Active", "present", 1, 1),
+        ),
+    )
+    empty = replace(
+        branch,
+        id="empty",
+        conditions=(replace(branch.conditions[0], id="only-disabled"),),
+    )
+
+    assert evaluate_rule_group(
+        _group(branch), page_text="present", page_number=1
+    ).branch_id == "branch"
+    assert evaluate_rule_group(
+        _group(empty), page_text="missing", page_number=1
+    ).branch_id is None
+    assert any("ต้องมี Condition" in issue for issue in validate_rule_groups([_group(empty)]))
+
+
+def test_repeated_condition_expression_is_counted_once_per_group(monkeypatch) -> None:
+    from mtpdflogo.application import rule_pipeline
+
+    calls: list[str] = []
+    original = rule_pipeline.count_occurrences
+
+    def counted(text, keyword, **options):
+        calls.append(keyword)
+        return original(text, keyword, **options)
+
+    monkeypatch.setattr(rule_pipeline, "count_occurrences", counted)
+    condition = RuleCondition("same", "Same", "amount", 5, 5)
+    first = RuleBranch("first", "First", (), conditions=(condition,))
+    second = RuleBranch(
+        "second",
+        "Second",
+        ("layer",),
+        conditions=(replace(condition, id="same-again", min_occurrences=3, max_occurrences=3),),
+    )
+
+    match = evaluate_rule_group(
+        _group(first, second), page_text="amount amount amount", page_number=1
+    )
+
+    assert match.branch_id == "second"
+    assert calls == ["amount"]

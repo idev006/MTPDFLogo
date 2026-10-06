@@ -14,6 +14,35 @@ class RuleScope(StrEnum):
     DOCUMENT = "document"
 
 
+class ConditionLogic(StrEnum):
+    """How enabled conditions inside one branch are combined."""
+
+    ALL = "all"
+    ANY = "any"
+
+
+@dataclass(frozen=True, slots=True)
+class RuleCondition:
+    """One independently configurable text occurrence predicate."""
+
+    id: str
+    name: str
+    keyword: str
+    min_occurrences: int = 1
+    max_occurrences: int | None = None
+    enabled: bool = True
+    use_regex: bool = False
+    case_sensitive: bool = False
+    negate: bool = False
+    scope: RuleScope = RuleScope.PAGE
+
+    def matches_count(self, count: int) -> bool:
+        matched = count >= self.min_occurrences and (
+            self.max_occurrences is None or count <= self.max_occurrences
+        )
+        return not matched if self.negate else matched
+
+
 @dataclass(frozen=True, slots=True)
 class RuleBranch:
     """One ordered if/elif/else branch and its independent layers."""
@@ -25,6 +54,8 @@ class RuleBranch:
     max_occurrences: int | None = 0
     enabled: bool = True
     is_else: bool = False
+    conditions: tuple[RuleCondition, ...] = ()
+    condition_logic: ConditionLogic = ConditionLogic.ALL
 
     def matches_count(self, count: int) -> bool:
         if self.is_else or not self.enabled:
@@ -47,4 +78,3 @@ class RuleGroup:
     case_sensitive: bool = False
     page_ranges: str = ""
     scope: RuleScope = RuleScope.PAGE
-

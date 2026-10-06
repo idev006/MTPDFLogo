@@ -2,7 +2,7 @@ from pathlib import Path
 
 import fitz
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
-from mtpdflogo.domain.rules import RuleBranch, RuleGroup
+from mtpdflogo.domain.rules import RuleBranch, RuleCondition, RuleGroup
 from mtpdflogo.infrastructure.pdf.overlay_service import (
     PageTextRule,
     PdfOverlaySpec,
@@ -303,3 +303,38 @@ def test_conditional_rule_pipeline_applies_different_layers_per_page(tmp_path: P
 
     with fitz.open(output) as result:
         assert [len(page.get_images(full=True)) for page in result] == [1, 1, 0]
+
+
+def test_compound_conditions_gate_overlay_export_per_page(tmp_path: Path) -> None:
+    source = tmp_path / "compound-source.pdf"
+    output = tmp_path / "compound-output.pdf"
+    with fitz.open() as document:
+        for text in (
+            "amount amount amount approved",
+            "amount amount amount",
+            "amount amount amount amount amount approved",
+        ):
+            page = document.new_page(width=400, height=240)
+            page.insert_text((36, 72), text)
+        document.save(source)
+    mark = PdfOverlaySpec(
+        overlay_type=OverlayType.TEXT,
+        position=Position.TOP_LEFT,
+        text="MATCH",
+        color=(1.0, 0.0, 0.0),
+    )
+    branch = RuleBranch(
+        "approved-three",
+        "Amount 3 and approved",
+        (mark,),
+        conditions=(
+            RuleCondition("amount", "Amount", "amount", 3, 3),
+            RuleCondition("approved", "Approved", "approved", 1, 1),
+        ),
+    )
+    rules = [RuleGroup("compound", "Compound", "", (branch,))]
+
+    apply_overlays(source, output, [], rule_groups=rules)
+
+    with fitz.open(output) as result:
+        assert [len(page.get_images(full=True)) for page in result] == [1, 0, 0]

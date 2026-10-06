@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from mtpdflogo.application.overlay_mapper import overlays_to_specs
-from mtpdflogo.domain.rules import RuleBranch, RuleGroup, RuleScope
+from mtpdflogo.domain.rules import (
+    ConditionLogic,
+    RuleBranch,
+    RuleCondition,
+    RuleGroup,
+    RuleScope,
+)
 
 
 def rule_groups_to_models(
@@ -18,6 +24,25 @@ def rule_groups_to_models(
     for group in groups:
         branches: list[RuleBranch] = []
         for branch in group.get("branches", []):
+            conditions = tuple(
+                RuleCondition(
+                    id=str(condition.get("id", "")),
+                    name=str(condition.get("name", "")),
+                    keyword=str(condition.get("keyword", "")),
+                    min_occurrences=max(0, int(condition.get("min_occurrences", 0))),
+                    max_occurrences=(
+                        None
+                        if condition.get("max_occurrences") is None
+                        else max(0, int(condition.get("max_occurrences", 0)))
+                    ),
+                    enabled=bool(condition.get("enabled", True)),
+                    use_regex=bool(condition.get("use_regex", False)),
+                    case_sensitive=bool(condition.get("case_sensitive", False)),
+                    negate=bool(condition.get("negate", False)),
+                    scope=RuleScope(str(condition.get("scope", RuleScope.PAGE.value))),
+                )
+                for condition in branch.get("conditions", [])
+            )
             branches.append(
                 RuleBranch(
                     id=str(branch.get("id", "")),
@@ -33,6 +58,10 @@ def rule_groups_to_models(
                     ),
                     enabled=bool(branch.get("enabled", True)),
                     is_else=bool(branch.get("is_else", False)),
+                    conditions=conditions,
+                    condition_logic=ConditionLogic(
+                        str(branch.get("condition_logic", ConditionLogic.ALL.value))
+                    ),
                 )
             )
         models.append(

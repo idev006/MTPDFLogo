@@ -1,7 +1,7 @@
-# Multi-Rule Overlay Pipeline v0.2
+# Multi-Rule Overlay Pipeline v0.3 — Compound Conditions
 
-สถานะ: Implementing  
-Branch: `codex/multi-rule-overlay-pipeline`  
+สถานะ: Implemented and QA verified
+Branch: `codex/compound-rule-conditions`
 SSOT owner: `docs/SSOT.md`
 
 ## Pain point
@@ -34,6 +34,7 @@ ELSE no layers
 Project
  └─ Rule Groups [0..N]
      └─ Branches [0..N], ordered
+         ├─ Conditions [1..N], ALL/ANY with optional NOT
          └─ Overlay Layers [0..N], ordered
 ```
 
@@ -49,7 +50,8 @@ Project
 
 - Stable UUID-backed ID and user-visible name.
 - `enabled` and `is_else`.
-- Inclusive `min_occurrences` and `max_occurrences` for normal branches.
+- Normal Branch owns Conditions [1..N] and selects `condition_logic = all | any`.
+- Each Condition owns keyword/regex, inclusive min/max, page/document scope, enabled and negate.
 - Independent Overlay Layers collection.
 - First enabled matching normal Branch wins; enabled Else is fallback.
 
@@ -66,7 +68,29 @@ Project
 |---|---|---|
 | Rule Group | Skip every Branch in the Group | Yes |
 | Branch | Continue to the next Branch/Else | Yes |
+| Condition | Ignore this Condition when evaluating its Branch | Yes |
 | Layer | Do not preview or export that Layer | Yes |
+
+## Compound condition contract
+
+```text
+IF ALL:
+   count("จำนวนเงิน") in [3,3]
+   AND count("อนุมัติ") in [1,1]
+   AND NOT count("ยกเลิก") in [1,+inf]
+THEN Layers A1..AN
+
+ELIF ANY:
+   count("เร่งด่วน") in [1,+inf]
+   OR regex("URGENT|PRIORITY") in [1,+inf]
+THEN Layers B1..BN
+```
+
+- `all`: ทุก Condition ที่ enabled ต้องเป็น true.
+- `any`: Condition ที่ enabled อย่างน้อยหนึ่งข้อต้องเป็น true.
+- Branch ปกติที่ไม่มี Condition enabled เป็น invalid และไม่ match.
+- `negate` กลับผลของ Condition หลังตรวจ range.
+- ไม่มี nested Boolean tree ใน v0.3; ใช้ ordered Branches เพิ่มแทนเพื่อให้ UI อ่านและ audit ได้ง่าย.
 
 Deleting is separate from disabling and requires explicit user intent. Disabled state is persisted.
 
@@ -78,7 +102,8 @@ Open one input document
   -> for each page
        -> extract page text
        -> for each enabled Group
-            -> count normalized keyword/regex in selected scope
+            -> evaluate enabled Conditions with cached normalized counts
+            -> combine using Branch all/any and per-Condition NOT
             -> scan enabled Branches in order
             -> select first match, otherwise enabled Else
             -> append enabled Layers
@@ -107,7 +132,7 @@ Rules / Layers | Large live preview | Selected layer properties
 
 Left panel tabs:
 
-- `เงื่อนไข`: Rule Group selector, Group settings, Decision Ladder, Branch range controls.
+- `เงื่อนไข`: Rule Group selector, Decision Ladder, ALL/ANY selector, Condition Stack และ Condition editor.
 - `Layers`: branch-local layer list, visibility, lock, order, add/duplicate/delete.
 
 The Preview status must state occurrence count, actual matched Branch, and Branch currently being
@@ -121,10 +146,11 @@ the deterministic fallback remains first-match order.
 
 ## Persistence and migration
 
-- Schema 5: hierarchical multi-rule TOML.
+- Schema 6: hierarchical multi-rule TOML with Branch Conditions.
+- Schema 5: migrate to one Condition per normal Branch when loaded, then save as schema 6.
 - Schemas 1-4: legacy flat overlays and optional Page Filter.
 - Loading schema 1-4 does not silently rewrite it; saving in legacy mode remains compatible.
-- Saving after Rule Groups are created writes schema 5.
+- Saving after Rule Groups are created writes schema 6.
 - IDs, enabled state, lock state, layer order, positioning, fonts, opacity, rotation, and asset paths
   are persisted.
 
@@ -157,12 +183,17 @@ UI: restore controls after thread cleanup
 - [ ] Undo/Redo command stack for destructive edits.
 - [ ] Copy/Paste Layers across Branches and Solo preview.
 - [x] Visual dual-handle 0-100 range control plus exact Min/Max spinboxes.
+- [x] Compound Condition domain and cached evaluator.
+- [x] Schema 5 -> 6 migration and round-trip tests.
+- [x] Condition Stack UI with ALL/ANY, enable and NOT.
+- [x] Compound preview diagnostics and one-pass export tests.
 - [ ] Full decision-table search diagnostics across the Queue.
 
 ## Acceptance criteria
 
 - Pages matching 3 and 5 occurrences in the same PDF receive different Branch Layers in one export.
 - `[3,3]` matches exactly 3 and not 2 or 4.
+- One Branch can evaluate N Conditions with deterministic ALL/ANY/NOT semantics.
 - Disabling a Branch falls through without deleting its Layers.
 - Disabling a Layer removes it from Preview and Export, then restoring it requires no reconfiguration.
 - Multi-rule Settings round-trip without losing hierarchy/state.

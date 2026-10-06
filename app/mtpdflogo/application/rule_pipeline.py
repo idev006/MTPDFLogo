@@ -9,7 +9,13 @@ from functools import lru_cache
 from typing import Any
 
 from mtpdflogo.application.page_ranges import page_in_ranges, parse_page_ranges
-from mtpdflogo.domain.rules import RuleBranch, RuleGroup, RuleScope
+from mtpdflogo.domain.rules import (
+    ConditionLogic,
+    RuleBranch,
+    RuleCondition,
+    RuleGroup,
+    RuleScope,
+)
 
 _MAX_REGEX_PATTERN_LENGTH = 500
 _NESTED_QUANTIFIER_PATTERN = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*{]")
@@ -23,6 +29,14 @@ class RuleMatch:
     branch_id: str | None
     occurrence_count: int
     overlays: tuple[Any, ...]
+    condition_results: tuple[ConditionResult, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ConditionResult:
+    condition_id: str
+    occurrence_count: int
+    matched: bool
 
 
 def evaluate_rule_group(
@@ -40,23 +54,93 @@ def evaluate_rule_group(
         if group.scope is RuleScope.DOCUMENT and document_text is not None
         else page_text
     )
-    count = count_occurrences(
-        content,
-        group.keyword,
-        use_regex=group.use_regex,
-        case_sensitive=group.case_sensitive,
-    )
+    count_cache: dict[tuple[str, bool, bool, RuleScope], int] = {}
+    legacy_count: int | None = None
+    last_results: tuple[ConditionResult, ...] = ()
     fallback: RuleBranch | None = None
     for branch in group.branches:
         if not branch.enabled:
             continue
         if branch.is_else:
             fallback = fallback or branch
-        elif branch.matches_count(count):
-            return RuleMatch(group.id, branch.id, count, branch.overlays)
+            continue
+        if branch.conditions:
+            enabled_conditions = [item for item in branch.conditions if item.enabled]
+            if not enabled_conditions:
+                continue
+            results = tuple(
+                _evaluate_condition(
+                    condition,
+                    page_text=page_text,
+                    document_text=document_text,
+                    count_cache=count_cache,
+                )
+                for condition in enabled_conditions
+            )
+            last_results = results
+            matched = (
+                all(result.matched for result in results)
+                if branch.condition_logic is ConditionLogic.ALL
+                else any(result.matched for result in results)
+            )
+            if matched:
+                return RuleMatch(
+                    group.id,
+                    branch.id,
+                    results[0].occurrence_count,
+                    branch.overlays,
+                    results,
+                )
+            continue
+        if legacy_count is None:
+            legacy_count = count_occurrences(
+                content,
+                group.keyword,
+                use_regex=group.use_regex,
+                case_sensitive=group.case_sensitive,
+            )
+        if branch.matches_count(legacy_count):
+            return RuleMatch(group.id, branch.id, legacy_count, branch.overlays)
     if fallback is not None:
-        return RuleMatch(group.id, fallback.id, count, fallback.overlays)
-    return RuleMatch(group.id, None, count, ())
+        count = last_results[0].occurrence_count if last_results else (legacy_count or 0)
+        return RuleMatch(
+            group.id,
+            fallback.id,
+            count,
+            fallback.overlays,
+            last_results,
+        )
+    count = last_results[0].occurrence_count if last_results else (legacy_count or 0)
+    return RuleMatch(group.id, None, count, (), last_results)
+
+
+def _evaluate_condition(
+    condition: RuleCondition,
+    *,
+    page_text: str,
+    document_text: str | None,
+    count_cache: dict[tuple[str, bool, bool, RuleScope], int],
+) -> ConditionResult:
+    key = (
+        condition.keyword,
+        condition.use_regex,
+        condition.case_sensitive,
+        condition.scope,
+    )
+    if key not in count_cache:
+        content = (
+            document_text
+            if condition.scope is RuleScope.DOCUMENT and document_text is not None
+            else page_text
+        )
+        count_cache[key] = count_occurrences(
+            content,
+            condition.keyword,
+            use_regex=condition.use_regex,
+            case_sensitive=condition.case_sensitive,
+        )
+    count = count_cache[key]
+    return ConditionResult(condition.id, count, condition.matches_count(count))
 
 
 def resolve_page_overlays(
@@ -89,7 +173,11 @@ def validate_rule_groups(groups: list[RuleGroup] | tuple[RuleGroup, ...]) -> lis
         if not group.id or group.id in seen_group_ids:
             issues.append(f"Rule Group ID ซ้ำหรือว่าง: {group.name}")
         seen_group_ids.add(group.id)
-        if group.use_regex:
+        uses_legacy_condition = any(
+            branch.enabled and not branch.is_else and not branch.conditions
+            for branch in group.branches
+        )
+        if uses_legacy_condition and group.use_regex:
             if len(group.keyword) > _MAX_REGEX_PATTERN_LENGTH:
                 issues.append(f"{group.name}: Regex ยาวเกิน {_MAX_REGEX_PATTERN_LENGTH} ตัวอักษร")
             if _NESTED_QUANTIFIER_PATTERN.search(group.keyword):
@@ -104,6 +192,7 @@ def validate_rule_groups(groups: list[RuleGroup] | tuple[RuleGroup, ...]) -> lis
             issues.append(f"{group.name}: ช่วงหน้าไม่ถูกต้อง: {error}")
         enabled_else = 0
         seen_branch_ids: set[str] = set()
+        seen_condition_ids: set[str] = set()
         intervals: list[tuple[int, int, str]] = []
         for branch in group.branches:
             if not branch.id or branch.id in seen_branch_ids:
@@ -111,6 +200,19 @@ def validate_rule_groups(groups: list[RuleGroup] | tuple[RuleGroup, ...]) -> lis
             seen_branch_ids.add(branch.id)
             if branch.is_else:
                 enabled_else += int(branch.enabled)
+                continue
+            if branch.conditions:
+                enabled_conditions = [item for item in branch.conditions if item.enabled]
+                if branch.enabled and not enabled_conditions:
+                    issues.append(f"{group.name}/{branch.name}: ต้องมี Condition ที่เปิดใช้งาน")
+                for condition in branch.conditions:
+                    if not condition.id or condition.id in seen_condition_ids:
+                        issues.append(
+                            f"{group.name}/{branch.name}: Condition ID ซ้ำหรือว่าง: "
+                            f"{condition.name}"
+                        )
+                    seen_condition_ids.add(condition.id)
+                    issues.extend(_condition_issues(group.name, branch.name, condition))
                 continue
             maximum = branch.max_occurrences
             if branch.min_occurrences < 0 or (
@@ -132,6 +234,35 @@ def validate_rule_groups(groups: list[RuleGroup] | tuple[RuleGroup, ...]) -> lis
             for other_low, other_high, other_name in intervals[index + 1 :]:
                 if max(low, other_low) <= min(high, other_high):
                     issues.append(f"{group.name}: {name} ซ้อนกับ {other_name}")
+    return issues
+
+
+def _condition_issues(
+    group_name: str,
+    branch_name: str,
+    condition: RuleCondition,
+) -> list[str]:
+    prefix = f"{group_name}/{branch_name}/{condition.name}"
+    issues: list[str] = []
+    if not condition.keyword.strip():
+        issues.append(f"{prefix}: กรุณาระบุคำหรือ Regex")
+    maximum = condition.max_occurrences
+    if condition.min_occurrences < 0 or (
+        maximum is not None and maximum < condition.min_occurrences
+    ):
+        issues.append(f"{prefix}: ช่วงจำนวนครั้งไม่ถูกต้อง")
+    if condition.use_regex:
+        if len(condition.keyword) > _MAX_REGEX_PATTERN_LENGTH:
+            issues.append(f"{prefix}: Regex ยาวเกิน {_MAX_REGEX_PATTERN_LENGTH} ตัวอักษร")
+        if _NESTED_QUANTIFIER_PATTERN.search(condition.keyword):
+            issues.append(f"{prefix}: Regex มี nested quantifier ที่เสี่ยงทำงานช้า")
+        try:
+            _compiled_pattern(
+                unicodedata.normalize("NFKD", condition.keyword),
+                condition.case_sensitive,
+            )
+        except re.error as error:
+            issues.append(f"{prefix}: Regex ไม่ถูกต้อง: {error}")
     return issues
 
 

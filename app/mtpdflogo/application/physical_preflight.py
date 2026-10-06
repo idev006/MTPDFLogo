@@ -100,7 +100,16 @@ def validate_rule_physical_source(
         with fitz.open(source) as document:
             document_text = None
             if any(
-                group.enabled and group.scope is RuleScope.DOCUMENT for group in groups
+                group.enabled
+                and (
+                    group.scope is RuleScope.DOCUMENT
+                    or any(
+                        condition.enabled and condition.scope is RuleScope.DOCUMENT
+                        for branch in group.branches
+                        for condition in branch.conditions
+                    )
+                )
+                for group in groups
             ):
                 document_text = "\n".join(page.get_text("text") for page in document)
             for page_number, page in enumerate(document, 1):

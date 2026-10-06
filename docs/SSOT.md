@@ -1,6 +1,6 @@
 # MTPDFLogo — Single Source of Truth
 
-สถานะ: Implementing / v0.2.0 Multi-Rule Overlay Pipeline
+สถานะ: Implemented and QA verified / v0.3.0 Compound Rule Conditions
 
 ## ขอบเขตที่ยืนยันแล้ว
 
@@ -16,6 +16,9 @@
 - ผู้ใช้สร้าง Rule Group ได้หลายกลุ่ม; แต่ละกลุ่มเป็น ordered `if/elif/else` chain และแต่ละ Branch มี Text/Logo Layers ของตนเองจำนวน 0..N รายการ
 - ช่วงจำนวนครั้งเขียนเป็น `[min,max]` และเป็น inclusive เสมอ: `min <= n <= max`; `[3,3]` เท่ากับ `n = 3`
 - Rule Group หนึ่งกลุ่มเลือก Branch แรกที่เปิดใช้งานและตรงเงื่อนไขเท่านั้น; ถ้าไม่ตรงจึงเลือก Else ที่เปิดใช้งาน
+- Branch ปกติมี Conditions ได้ 1..N ข้อ และกำหนดตัวเชื่อมได้ว่า `all` (AND) หรือ `any` (OR); Condition แต่ละข้อเปิด `negate` (NOT) ได้
+- Condition แต่ละข้อกำหนด keyword/regex, inclusive occurrence range, case sensitivity และ scope (`page`/`document`) ของตนเอง
+- Condition ที่ disabled ถูกตัดออกจากการคำนวณโดยไม่ลบค่า; Branch ปกติที่ไม่มี Condition เปิดใช้งานต้องไม่ match และต้องถูก preflight block
 - Rule Group หลายกลุ่มประเมินแยกกันและรวม Layers จาก Branch ที่ตรงของแต่ละกลุ่มตามลำดับ Group
 - การนับเลือกได้ทั้งต่อหน้า (`page`) และรวมทั้งเอกสาร (`document`) แต่การวางผลลัพธ์ยังเกิดบนแต่ละหน้าที่ผ่าน page range
 - ผู้ใช้ต้องวาง Text/Logo ได้ 2 วิธี: เลือกตำแหน่งมาตรฐานจาก dropdown 9 จุด หรือ drag-and-drop วางอิสระบน preview
@@ -97,6 +100,7 @@
 - หน้าจอออกแบบต้องมี tabs `เงื่อนไข` และ `Layers`; การเลือก Branch เปลี่ยน Layer collection ที่แก้ไขและ Preview ต้องบอก Branch ที่ตรงจริงบนหน้าปัจจุบัน
 - Layer panel ใช้แนวคิด Photoshop: เปิด/ปิดด้วย checkbox/eye, ล็อกการลาก/resize, duplicate, ลบ และจัดลำดับหน้า-หลัง
 - สถานะเปิด/ปิดมี 3 ระดับและต้องบันทึกใน Settings: Rule Group, Branch และ Layer
+- Compound mode มีสถานะเปิด/ปิดระดับ Condition เพิ่มอีกหนึ่งระดับและต้องบันทึกใน Settings
 - Layer ปิดใช้งานต้องไม่แสดงใน Preview และไม่ถูก Export; การปิดไม่ลบค่าของ Layer
 
 ## Batch contract
@@ -147,10 +151,12 @@
 
 - Overlay model คือ `OverlayItem` หนึ่งรายการต่อหนึ่ง Text หรือ Logo
 - Multi-rule domain contract อยู่ใน `domain/rules.py`; pure evaluator อยู่ใน `application/rule_pipeline.py`; UI dictionary mapping อยู่ใน `application/rule_mapper.py`
-- Rule preset ใช้ TOML schema 5 และเก็บ hierarchy `rule_groups -> branches -> overlays`; preset schema 1-4 ยังโหลดใน legacy mode ได้
+- Rule preset ใช้ TOML schema 6 และเก็บ hierarchy `rule_groups -> branches -> conditions/overlays`; schema 5 ต้อง migrate ในหน่วยความจำเป็นหนึ่ง Condition ต่อ Branch และ preset schema 1-4 ยังโหลดใน legacy mode ได้
 - โหมด legacy และ multi-rule ต้องอยู่ร่วมกันได้: ถ้าไม่มี Rule Group ให้ใช้ flat overlays + Page Filter เดิม; ถ้ามี Rule Group ให้ Rule Pipeline เป็นเจ้าของการเลือก Layers และไม่ใช้ Page Filter เดิมซ้ำ
 - Rule evaluation อ่าน text layer ของแต่ละหน้าเพียงครั้งต่อ Group และ export output เพียงครั้งเดียว ห้ามสร้าง output กลาง N รอบ
 - Branch ที่ disabled ถูกข้ามและตรวจ Branch ถัดไป; Group ที่ disabled ถูกข้ามทั้งกลุ่ม; Layer ที่ disabled ไม่ถูก render
+- Compound Branch คำนวณ Conditions ที่ enabled เท่านั้น: `all([])` และ `any([])` ต้องถือเป็น false เพื่อป้องกัน Branch ว่าง match โดยไม่ตั้งใจ
+- `negate=true` กลับผลหลังตรวจ inclusive range ของ Condition นั้นแล้ว
 - Else เป็น Branch ปกติที่มี Layers 0..N ได้ แต่หนึ่ง Group เปิด Else ได้ไม่เกินหนึ่ง Branch
 - ช่วง Branch ที่เปิดใช้งานและซ้อนกันต้องถูกแจ้งเตือน; runtime ยังคง deterministic โดยเลือก Branch แรกตามลำดับ
 - ลำดับ Layer ด้านบนใน UI หมายถึงอยู่ด้านหน้ากว่าและ export engine วาดตาม `z_index` จากหลังไปหน้า

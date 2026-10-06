@@ -225,6 +225,22 @@ def _rule_groups_payload(
                         "is_else": branch.is_else,
                         "min_occurrences": branch.min_occurrences,
                         "max_occurrences": branch.max_occurrences,
+                        "condition_logic": str(branch.condition_logic),
+                        "conditions": [
+                            {
+                                "id": condition.id,
+                                "name": condition.name,
+                                "keyword": condition.keyword,
+                                "min_occurrences": condition.min_occurrences,
+                                "max_occurrences": condition.max_occurrences,
+                                "enabled": condition.enabled,
+                                "use_regex": condition.use_regex,
+                                "case_sensitive": condition.case_sensitive,
+                                "negate": condition.negate,
+                                "scope": str(condition.scope),
+                            }
+                            for condition in branch.conditions
+                        ],
                         "overlays": [
                             _rule_overlay_payload(overlay) for overlay in branch.overlays
                         ],

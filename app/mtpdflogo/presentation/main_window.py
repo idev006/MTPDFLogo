@@ -321,6 +321,7 @@ class MainWindow(QMainWindow):
         self._rule_groups: list[dict[str, Any]] = []
         self._active_rule_group_id: str | None = None
         self._active_rule_branch_id: str | None = None
+        self._active_condition_id: str | None = None
         self._updating_rules = False
         self._pending_batch_jobs: list[tuple[Path, Path]] = []
         self._last_export_jobs: list[tuple[Path, Path]] = []
@@ -1095,43 +1096,70 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.rule_group_enabled)
         group_form = QFormLayout()
         self.rule_group_name = QLineEdit()
-        self.rule_group_name.setPlaceholderText("เช่น จำนวนเงิน")
+        self.rule_group_name.setPlaceholderText("เช่น ตรวจแบบฟอร์มและอนุมัติ")
         self.rule_group_name.editingFinished.connect(self._rule_controls_changed)
-        self.rule_keyword = QLineEdit()
-        self.rule_keyword.setPlaceholderText("คำหรือ Regex ที่ต้องการนับ")
-        self.rule_keyword.editingFinished.connect(self._rule_controls_changed)
-        self.rule_regex = QCheckBox("Regex")
-        self.rule_regex.toggled.connect(self._rule_controls_changed)
-        self.rule_scope = QComboBox()
-        self.rule_scope.addItem("นับแยกแต่ละหน้า", "page")
-        self.rule_scope.addItem("นับรวมทั้งเอกสาร", "document")
-        self.rule_scope.currentIndexChanged.connect(self._rule_controls_changed)
         self.rule_page_ranges = QLineEdit()
         self.rule_page_ranges.setPlaceholderText("ทุกหน้า หรือ 1-3,5")
         self.rule_page_ranges.editingFinished.connect(self._rule_controls_changed)
         group_form.addRow("ชื่อ", self.rule_group_name)
-        group_form.addRow("ค้นหา", self.rule_keyword)
-        group_form.addRow("รูปแบบ", self.rule_regex)
-        group_form.addRow("ขอบเขต", self.rule_scope)
         group_form.addRow("ช่วงหน้า", self.rule_page_ranges)
         layout.addLayout(group_form)
-        layout.addWidget(QLabel("IF / ELIF / ELSE — ตรวจจากบนลงล่าง"))
+        layout.addWidget(QLabel("IF / ELIF / ELSE — ตรวจจากบนลงล่าง เลือก Branch แรกที่ตรง"))
         self.rule_branch_list = QListWidget()
         self.rule_branch_list.currentRowChanged.connect(self._rule_branch_selected)
         self.rule_branch_list.itemChanged.connect(self._branch_enabled_changed)
         layout.addWidget(self.rule_branch_list, 1)
         branch_buttons = QHBoxLayout()
-        add_branch = QPushButton("+ เงื่อนไข")
+        add_branch = QPushButton("+ Branch")
+        add_branch.setToolTip("เพิ่ม ELIF ซึ่งมีชุดเงื่อนไขและ Layers เป็นของตัวเอง")
         add_branch.clicked.connect(self._add_rule_branch)
         add_else = QPushButton("+ Else")
         add_else.clicked.connect(self._add_else_branch)
-        delete_branch = QPushButton("ลบ")
+        delete_branch = QPushButton("ลบ Branch")
         delete_branch.clicked.connect(self._delete_rule_branch)
         branch_buttons.addWidget(add_branch)
         branch_buttons.addWidget(add_else)
         branch_buttons.addWidget(delete_branch)
         layout.addLayout(branch_buttons)
-        branch_form = QFormLayout()
+
+        condition_box = QGroupBox("Condition Stack — เงื่อนไขย่อยของ Branch ที่เลือก")
+        condition_layout = QVBoxLayout(condition_box)
+        logic_row = QHBoxLayout()
+        logic_row.addWidget(QLabel("Branch จะตรงเมื่อ"))
+        self.branch_condition_logic = QComboBox()
+        self.branch_condition_logic.addItem("ตรงทุกข้อ (AND)", "all")
+        self.branch_condition_logic.addItem("ตรงอย่างน้อยหนึ่งข้อ (OR)", "any")
+        self.branch_condition_logic.currentIndexChanged.connect(
+            self._rule_controls_changed
+        )
+        logic_row.addWidget(self.branch_condition_logic, 1)
+        condition_layout.addLayout(logic_row)
+        self.condition_list = QListWidget()
+        self.condition_list.setMinimumHeight(90)
+        self.condition_list.currentRowChanged.connect(self._condition_selected)
+        self.condition_list.itemChanged.connect(self._condition_enabled_changed)
+        condition_layout.addWidget(self.condition_list)
+        condition_buttons = QHBoxLayout()
+        add_condition = QPushButton("+ Condition")
+        add_condition.clicked.connect(self._add_rule_condition)
+        delete_condition = QPushButton("ลบ Condition")
+        delete_condition.clicked.connect(self._delete_rule_condition)
+        condition_buttons.addWidget(add_condition)
+        condition_buttons.addWidget(delete_condition)
+        condition_layout.addLayout(condition_buttons)
+
+        condition_form = QFormLayout()
+        self.rule_keyword = QLineEdit()
+        self.rule_keyword.setPlaceholderText("คำหรือ Regex ที่ต้องการนับ")
+        self.rule_keyword.editingFinished.connect(self._rule_controls_changed)
+        self.rule_regex = QCheckBox("Regex")
+        self.rule_regex.toggled.connect(self._rule_controls_changed)
+        self.rule_negate = QCheckBox("NOT — ตรงเมื่อผลไม่อยู่ในช่วง")
+        self.rule_negate.toggled.connect(self._rule_controls_changed)
+        self.rule_scope = QComboBox()
+        self.rule_scope.addItem("นับแยกแต่ละหน้า", "page")
+        self.rule_scope.addItem("นับรวมทั้งเอกสาร", "document")
+        self.rule_scope.currentIndexChanged.connect(self._rule_controls_changed)
         self.branch_min = QSpinBox()
         self.branch_min.setRange(0, 1_000_000)
         self.branch_min.valueChanged.connect(self._rule_controls_changed)
@@ -1140,10 +1168,15 @@ class MainWindow(QMainWindow):
         self.branch_max.valueChanged.connect(self._rule_controls_changed)
         self.branch_range = RangeSlider(0, 100, 3, 3)
         self.branch_range.rangeChanged.connect(self._branch_range_changed)
-        branch_form.addRow("อย่างน้อย", self.branch_min)
-        branch_form.addRow("ไม่เกิน", self.branch_max)
-        branch_form.addRow("ช่วง 0–100", self.branch_range)
-        layout.addLayout(branch_form)
+        condition_form.addRow("ค้นหา", self.rule_keyword)
+        condition_form.addRow("รูปแบบ", self.rule_regex)
+        condition_form.addRow("กลับผล", self.rule_negate)
+        condition_form.addRow("ขอบเขต", self.rule_scope)
+        condition_form.addRow("อย่างน้อย", self.branch_min)
+        condition_form.addRow("ไม่เกิน", self.branch_max)
+        condition_form.addRow("ช่วง 0–100", self.branch_range)
+        condition_layout.addLayout(condition_form)
+        layout.addWidget(condition_box)
         self.rule_diagnostic = QLabel(
             "โหมดเดิม: Page Filter หนึ่งเงื่อนไข ใช้ได้ตามปกติ"
         )
@@ -1170,11 +1203,58 @@ class MainWindow(QMainWindow):
             None,
         )
 
+    def _active_rule_condition(self) -> dict[str, Any] | None:
+        branch = self._active_rule_branch()
+        if branch is None or branch.get("is_else"):
+            return None
+        return next(
+            (
+                item
+                for item in branch.get("conditions", [])
+                if item["id"] == self._active_condition_id
+            ),
+            None,
+        )
+
+    def _condition_ids(self) -> list[str]:
+        return [
+            condition["id"]
+            for group in self._rule_groups
+            for branch in group.get("branches", [])
+            for condition in branch.get("conditions", [])
+        ]
+
+    def _new_condition(
+        self,
+        *,
+        keyword: str = "",
+        value: int = 1,
+        use_regex: bool = False,
+        scope: str = "page",
+    ) -> dict[str, Any]:
+        return {
+            "id": self._new_rule_id("condition", self._condition_ids()),
+            "name": f"พบ {value} ครั้ง",
+            "enabled": True,
+            "keyword": keyword,
+            "use_regex": use_regex,
+            "case_sensitive": False,
+            "negate": False,
+            "scope": scope,
+            "min_occurrences": value,
+            "max_occurrences": value,
+        }
+
     def _add_rule_group(self) -> None:
         if not self._rule_groups:
             self._legacy_overlays = self._overlays
         group_id = self._new_rule_id("rule", [item["id"] for item in self._rule_groups])
         branch_id = self._new_rule_id("branch", [])
+        condition = self._new_condition(
+            keyword=self.page_filter_keyword.text().strip(),
+            value=3,
+            use_regex=self.page_filter_regex.isChecked(),
+        )
         group = {
             "id": group_id,
             "name": f"Rule Group {len(self._rule_groups) + 1}",
@@ -1192,6 +1272,8 @@ class MainWindow(QMainWindow):
                     "is_else": False,
                     "min_occurrences": 3,
                     "max_occurrences": 3,
+                    "condition_logic": "all",
+                    "conditions": [condition],
                     "overlays": [],
                 }
             ],
@@ -1199,6 +1281,7 @@ class MainWindow(QMainWindow):
         self._rule_groups.append(group)
         self._active_rule_group_id = group_id
         self._active_rule_branch_id = branch_id
+        self._active_condition_id = condition["id"]
         self._rebuild_rule_controls()
         self.rule_layer_tabs.setCurrentIndex(0)
         self._activate_rule_branch()
@@ -1222,6 +1305,12 @@ class MainWindow(QMainWindow):
         self._active_rule_branch_id = (
             next_group["branches"][0]["id"] if next_group and next_group["branches"] else None
         )
+        next_branch = self._active_rule_branch()
+        self._active_condition_id = (
+            next_branch.get("conditions", [])[0]["id"]
+            if next_branch and next_branch.get("conditions")
+            else None
+        )
         if not self._rule_groups:
             self._overlays = self._legacy_overlays
         self._rebuild_rule_controls()
@@ -1233,7 +1322,19 @@ class MainWindow(QMainWindow):
             self._add_rule_group()
             return
         regular = [branch for branch in group["branches"] if not branch.get("is_else")]
-        value = max((int(branch.get("max_occurrences", 1)) for branch in regular), default=1) + 2
+        maxima = [
+            int(condition.get("max_occurrences") or 1)
+            for item in regular
+            for condition in item.get("conditions", [])
+        ]
+        value = max(maxima, default=1) + 2
+        current = self._active_rule_condition()
+        condition = self._new_condition(
+            keyword=str(current.get("keyword", "")) if current else group.get("keyword", ""),
+            value=value,
+            use_regex=bool(current.get("use_regex", False)) if current else False,
+            scope=str(current.get("scope", "page")) if current else "page",
+        )
         branch = {
             "id": self._new_rule_id(
                 "branch", [item["id"] for item in group["branches"]]
@@ -1243,6 +1344,8 @@ class MainWindow(QMainWindow):
             "is_else": False,
             "min_occurrences": value,
             "max_occurrences": value,
+            "condition_logic": "all",
+            "conditions": [condition],
             "overlays": [],
         }
         else_index = next(
@@ -1251,6 +1354,7 @@ class MainWindow(QMainWindow):
         )
         group["branches"].insert(else_index, branch)
         self._active_rule_branch_id = branch["id"]
+        self._active_condition_id = condition["id"]
         self._rebuild_rule_controls()
         self._activate_rule_branch()
 
@@ -1272,10 +1376,13 @@ class MainWindow(QMainWindow):
                 "is_else": True,
                 "min_occurrences": 0,
                 "max_occurrences": 0,
+                "condition_logic": "all",
+                "conditions": [],
                 "overlays": [],
             }
             group["branches"].append(existing)
         self._active_rule_branch_id = existing["id"]
+        self._active_condition_id = None
         self._rebuild_rule_controls()
         self._activate_rule_branch()
 
@@ -1288,6 +1395,12 @@ class MainWindow(QMainWindow):
         self._active_rule_branch_id = (
             group["branches"][0]["id"] if group["branches"] else None
         )
+        next_branch = self._active_rule_branch()
+        self._active_condition_id = (
+            next_branch.get("conditions", [])[0]["id"]
+            if next_branch and next_branch.get("conditions")
+            else None
+        )
         self._rebuild_rule_controls()
         self._activate_rule_branch()
 
@@ -1299,6 +1412,12 @@ class MainWindow(QMainWindow):
         self._active_rule_branch_id = (
             group["branches"][0]["id"] if group and group["branches"] else None
         )
+        branch = self._active_rule_branch()
+        self._active_condition_id = (
+            branch.get("conditions", [])[0]["id"]
+            if branch and branch.get("conditions")
+            else None
+        )
         self._rebuild_rule_controls()
         self._activate_rule_branch()
 
@@ -1308,6 +1427,13 @@ class MainWindow(QMainWindow):
         self._active_rule_branch_id = str(
             self.rule_branch_list.item(row).data(Qt.ItemDataRole.UserRole)
         )
+        branch = self._active_rule_branch()
+        self._active_condition_id = (
+            branch.get("conditions", [])[0]["id"]
+            if branch and branch.get("conditions")
+            else None
+        )
+        self._rebuild_condition_list()
         self._sync_rule_fields()
         self._activate_rule_branch()
 
@@ -1324,31 +1450,153 @@ class MainWindow(QMainWindow):
             self._update_rule_diagnostic()
             self._refresh_batch_readiness()
 
+    @staticmethod
+    def _condition_summary(condition: dict[str, Any]) -> str:
+        keyword = str(condition.get("keyword", "")).strip() or "<ยังไม่ระบุคำ>"
+        minimum = int(condition.get("min_occurrences", 0))
+        maximum = condition.get("max_occurrences")
+        if maximum is None:
+            interval = f"≥ {minimum}"
+        elif minimum == int(maximum):
+            interval = f"= {minimum}"
+        else:
+            interval = f"{minimum}–{int(maximum)}"
+        prefix = "NOT " if condition.get("negate", False) else ""
+        regex = "Regex: " if condition.get("use_regex", False) else ""
+        scope = "ทั้งเอกสาร" if condition.get("scope") == "document" else "หน้านี้"
+        return f"{prefix}{regex}“{keyword}” {interval} ครั้ง · {scope}"
+
+    def _rebuild_condition_list(self) -> None:
+        branch = self._active_rule_branch()
+        self._updating_rules = True
+        self.condition_list.clear()
+        if branch is not None and not branch.get("is_else"):
+            for condition in branch.get("conditions", []):
+                item = QListWidgetItem(self._condition_summary(condition))
+                item.setData(Qt.ItemDataRole.UserRole, condition["id"])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if condition.get("enabled", True)
+                    else Qt.CheckState.Unchecked
+                )
+                self.condition_list.addItem(item)
+            row = next(
+                (
+                    index
+                    for index in range(self.condition_list.count())
+                    if self.condition_list.item(index).data(Qt.ItemDataRole.UserRole)
+                    == self._active_condition_id
+                ),
+                0 if self.condition_list.count() else -1,
+            )
+            self.condition_list.setCurrentRow(row)
+        self._updating_rules = False
+
+    def _condition_selected(self, row: int) -> None:
+        if self._updating_rules or row < 0:
+            return
+        self._active_condition_id = str(
+            self.condition_list.item(row).data(Qt.ItemDataRole.UserRole)
+        )
+        self._sync_rule_fields()
+
+    def _condition_enabled_changed(self, item: QListWidgetItem) -> None:
+        if self._updating_rules:
+            return
+        branch = self._active_rule_branch()
+        if branch is None:
+            return
+        condition_id = item.data(Qt.ItemDataRole.UserRole)
+        condition = next(
+            (
+                entry
+                for entry in branch.get("conditions", [])
+                if entry["id"] == condition_id
+            ),
+            None,
+        )
+        if condition is not None:
+            condition["enabled"] = item.checkState() == Qt.CheckState.Checked
+            self._update_rule_diagnostic()
+            self._refresh_preview()
+            self._refresh_batch_readiness()
+
+    def _add_rule_condition(self) -> None:
+        branch = self._active_rule_branch()
+        if branch is None or branch.get("is_else"):
+            return
+        current = self._active_rule_condition()
+        condition = self._new_condition(
+            keyword=str(current.get("keyword", "")) if current else "",
+            value=1,
+            use_regex=bool(current.get("use_regex", False)) if current else False,
+            scope=str(current.get("scope", "page")) if current else "page",
+        )
+        branch.setdefault("conditions", []).append(condition)
+        self._active_condition_id = condition["id"]
+        self._rebuild_rule_controls(preserve_selection=True)
+        self._update_rule_diagnostic()
+
+    def _delete_rule_condition(self) -> None:
+        branch = self._active_rule_branch()
+        condition = self._active_rule_condition()
+        if branch is None or condition is None:
+            return
+        branch["conditions"] = [
+            item for item in branch.get("conditions", []) if item["id"] != condition["id"]
+        ]
+        self._active_condition_id = (
+            branch["conditions"][0]["id"] if branch["conditions"] else None
+        )
+        self._rebuild_rule_controls(preserve_selection=True)
+        self._update_rule_diagnostic()
+        self._refresh_preview()
+        self._refresh_batch_readiness()
+
     def _rule_controls_changed(self, *_args: Any) -> None:
         if self._updating_rules:
             return
         group = self._active_rule_group()
         branch = self._active_rule_branch()
+        condition = self._active_rule_condition()
         if group is None:
             return
         group.update(
             {
                 "name": self.rule_group_name.text().strip() or "Rule Group",
                 "enabled": self.rule_group_enabled.isChecked(),
-                "keyword": self.rule_keyword.text(),
-                "use_regex": self.rule_regex.isChecked(),
-                "scope": str(self.rule_scope.currentData()),
                 "page_ranges": self.rule_page_ranges.text().strip(),
             }
         )
         if branch is not None and not branch.get("is_else"):
-            branch["min_occurrences"] = self.branch_min.value()
-            branch["max_occurrences"] = self.branch_max.value()
-            branch["name"] = (
-                f"เท่ากับ {self.branch_min.value()}"
-                if self.branch_min.value() == self.branch_max.value()
-                else f"ช่วง {self.branch_min.value()}–{self.branch_max.value()}"
+            branch["condition_logic"] = str(self.branch_condition_logic.currentData())
+        if condition is not None:
+            condition.update(
+                {
+                    "keyword": self.rule_keyword.text(),
+                    "use_regex": self.rule_regex.isChecked(),
+                    "negate": self.rule_negate.isChecked(),
+                    "scope": str(self.rule_scope.currentData()),
+                    "min_occurrences": self.branch_min.value(),
+                    "max_occurrences": self.branch_max.value(),
+                }
             )
+            condition["name"] = self._condition_summary(condition)
+            if branch is not None:
+                branch["min_occurrences"] = condition["min_occurrences"]
+                branch["max_occurrences"] = condition["max_occurrences"]
+                count = len(branch.get("conditions", []))
+                logic = str(branch.get("condition_logic", "all")).upper()
+                branch["name"] = (
+                    self._condition_summary(condition)
+                    if count == 1
+                    else f"{count} Conditions ({logic})"
+                )
+            if branch and branch.get("conditions", [None])[0] is condition:
+                group["keyword"] = condition["keyword"]
+                group["use_regex"] = condition["use_regex"]
+                group["scope"] = condition["scope"]
         self._rebuild_rule_controls(preserve_selection=True)
         self._update_rule_diagnostic()
         self._refresh_preview()
@@ -1376,8 +1624,10 @@ class MainWindow(QMainWindow):
         if group is not None:
             for index, branch in enumerate(group["branches"]):
                 prefix = "Else" if branch.get("is_else") else ("If" if index == 0 else "Elif")
+                condition_count = len(branch.get("conditions", []))
                 item = QListWidgetItem(
-                    f"{prefix}: {branch['name']}  ·  {len(branch.get('overlays', []))} Layers"
+                    f"{prefix}: {branch['name']}  ·  {condition_count} Conditions  ·  "
+                    f"{len(branch.get('overlays', []))} Layers"
                 )
                 item.setData(Qt.ItemDataRole.UserRole, branch["id"])
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -1398,6 +1648,7 @@ class MainWindow(QMainWindow):
             )
             self.rule_branch_list.setCurrentRow(branch_row)
         self._updating_rules = False
+        self._rebuild_condition_list()
         self._sync_rule_fields()
         if not preserve_selection:
             self._update_rule_diagnostic()
@@ -1405,36 +1656,63 @@ class MainWindow(QMainWindow):
     def _sync_rule_fields(self) -> None:
         group = self._active_rule_group()
         branch = self._active_rule_branch()
+        condition = self._active_rule_condition()
         self._updating_rules = True
         enabled = group is not None
         for control in (
             self.rule_group_enabled,
             self.rule_group_name,
-            self.rule_keyword,
-            self.rule_regex,
-            self.rule_scope,
             self.rule_page_ranges,
         ):
             control.setEnabled(enabled)
         if group is not None:
             self.rule_group_enabled.setChecked(bool(group.get("enabled", True)))
             self.rule_group_name.setText(group["name"])
-            self.rule_keyword.setText(group["keyword"])
-            self.rule_regex.setChecked(bool(group.get("use_regex", False)))
-            self.rule_scope.setCurrentIndex(self.rule_scope.findData(group.get("scope", "page")))
             self.rule_page_ranges.setText(group.get("page_ranges", ""))
-        is_condition = branch is not None and not branch.get("is_else")
-        self.branch_min.setEnabled(is_condition)
-        self.branch_max.setEnabled(is_condition)
-        self.branch_range.setEnabled(is_condition)
-        if branch is not None:
-            self.branch_min.setValue(int(branch.get("min_occurrences", 0)))
-            maximum = branch.get("max_occurrences", 0)
+        else:
+            self.rule_group_enabled.setChecked(False)
+            self.rule_group_name.clear()
+            self.rule_page_ranges.clear()
+        is_normal_branch = branch is not None and not branch.get("is_else")
+        self.branch_condition_logic.setEnabled(is_normal_branch)
+        self.condition_list.setEnabled(is_normal_branch)
+        if is_normal_branch:
+            logic_index = self.branch_condition_logic.findData(
+                branch.get("condition_logic", "all")
+            )
+            self.branch_condition_logic.setCurrentIndex(max(0, logic_index))
+        condition_enabled = condition is not None
+        for control in (
+            self.rule_keyword,
+            self.rule_regex,
+            self.rule_negate,
+            self.rule_scope,
+            self.branch_min,
+            self.branch_max,
+            self.branch_range,
+        ):
+            control.setEnabled(condition_enabled)
+        if condition is not None:
+            self.rule_keyword.setText(str(condition.get("keyword", "")))
+            self.rule_regex.setChecked(bool(condition.get("use_regex", False)))
+            self.rule_negate.setChecked(bool(condition.get("negate", False)))
+            scope_index = self.rule_scope.findData(condition.get("scope", "page"))
+            self.rule_scope.setCurrentIndex(max(0, scope_index))
+            self.branch_min.setValue(int(condition.get("min_occurrences", 0)))
+            maximum = condition.get("max_occurrences", 0)
             self.branch_max.setValue(1_000_000 if maximum is None else int(maximum))
             self.branch_range.setValues(
                 min(100, self.branch_min.value()),
                 min(100, max(self.branch_min.value(), self.branch_max.value())),
             )
+        else:
+            self.rule_keyword.clear()
+            self.rule_regex.setChecked(False)
+            self.rule_negate.setChecked(False)
+            self.rule_scope.setCurrentIndex(0)
+            self.branch_min.setValue(0)
+            self.branch_max.setValue(0)
+            self.branch_range.setValues(0, 0)
         self._updating_rules = False
 
     def _activate_rule_branch(self) -> None:
@@ -1467,9 +1745,10 @@ class MainWindow(QMainWindow):
         group = self._active_rule_group()
         branch = self._active_rule_branch()
         state = "เปิด" if group and group.get("enabled") else "ปิด"
+        condition_count = len(branch.get("conditions", [])) if branch else 0
         self.rule_diagnostic.setText(
             f"{state} · {branch['name'] if branch else 'ยังไม่มี Branch'} · "
-            f"{len(self._overlays)} Layers"
+            f"{condition_count} Conditions · {len(self._overlays)} Layers"
         )
 
     def _layer_enabled_changed(self, item: QListWidgetItem) -> None:
@@ -2607,6 +2886,7 @@ class MainWindow(QMainWindow):
         self._rule_groups = []
         self._active_rule_group_id = None
         self._active_rule_branch_id = None
+        self._active_condition_id = None
         self._legacy_overlays = loaded
         self._overlays = self._legacy_overlays
         self._rebuild_rule_controls()
@@ -2642,6 +2922,12 @@ class MainWindow(QMainWindow):
         self._active_rule_branch_id = (
             first_group["branches"][0]["id"]
             if first_group and first_group["branches"]
+            else None
+        )
+        first_branch = self._active_rule_branch()
+        self._active_condition_id = (
+            first_branch.get("conditions", [])[0]["id"]
+            if first_branch and first_branch.get("conditions")
             else None
         )
         self._preferences.remember_settings_file(source)
@@ -3454,8 +3740,20 @@ class MainWindow(QMainWindow):
             )
             selected = self._active_rule_branch()
             selected_text = f" · กำลังแก้ {selected['name']}" if selected else ""
+            condition_by_id = {
+                condition.id: condition
+                for branch in model.branches
+                for condition in branch.conditions
+            }
+            details = []
+            for result in match.condition_results:
+                condition = condition_by_id.get(result.condition_id)
+                label = condition.keyword if condition is not None else result.condition_id
+                marker = "✓" if result.matched else "✗"
+                details.append(f"{label}: {result.occurrence_count} {marker}")
+            evidence = " | ".join(details) or f"พบ {match.occurrence_count} ครั้ง"
             self.rule_preview_status.setText(
-                f"หน้านี้พบ {match.occurrence_count} ครั้ง → {matched}{selected_text}"
+                f"{evidence} → {matched}{selected_text}"
             )
         except (StopIteration, TypeError, ValueError) as error:
             self.rule_preview_status.setText(f"Rule ยังไม่พร้อม: {error}")

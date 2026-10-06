@@ -340,7 +340,16 @@ def apply_overlays(
         total_pages = document.page_count
         document_text = None
         if rule_groups is not None and any(
-            group.enabled and group.scope is RuleScope.DOCUMENT for group in rule_groups
+            group.enabled
+            and (
+                group.scope is RuleScope.DOCUMENT
+                or any(
+                    condition.enabled and condition.scope is RuleScope.DOCUMENT
+                    for branch in group.branches
+                    for condition in branch.conditions
+                )
+            )
+            for group in rule_groups
         ):
             document_text = "\n".join(page.get_text("text") for page in document)
         for page_number, page in enumerate(document, 1):
