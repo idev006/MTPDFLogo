@@ -13,6 +13,9 @@ def test_readiness_message_is_actionable() -> None:
     assert readiness_message("invalid_page_filter", output_ready=False) == (
         "แก้เงื่อนไข Search/Regex ก่อนเริ่ม"
     )
+    assert readiness_message("invalid_rules", output_ready=False) == (
+        "แก้ Rules/Conditions ก่อนเริ่ม"
+    )
     assert readiness_message("ready", output_ready=True) == "พร้อมเริ่ม"
     assert blocked_start_message("missing_overlay") == "เริ่มไม่ได้: เพิ่ม Text หรือ Logo ก่อนเริ่ม"
     assert blocked_start_message("ready") == "พร้อมเริ่ม Batch"

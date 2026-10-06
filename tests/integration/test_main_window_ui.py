@@ -869,6 +869,34 @@ def test_pasted_output_folder_updates_queue_and_start_button(qtbot, tmp_path) ->
     assert f"Workers: {window.worker_count.value()}" in window.queue_summary.text()
 
 
+def test_compound_rules_report_actual_blocker_and_ignore_legacy_filter(qtbot, tmp_path) -> None:
+    source = tmp_path / "input.pdf"
+    destination = tmp_path / "out" / "input-watermask.pdf"
+    source.touch()
+    destination.parent.mkdir()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._add_rule_group()
+    window._append_overlay(OverlayType.TEXT)
+    window._populate_queue([(source, destination)])
+
+    window.page_filter_enabled.setChecked(True)
+    window.page_filter_regex.setChecked(True)
+    window.page_filter_keyword.setText("[")
+    window._refresh_batch_readiness()
+
+    assert not window.start_batch_action.isEnabled()
+    assert window._batch_readiness_reason == "invalid_rules"
+    assert "กรุณาระบุคำหรือ Regex" in window.start_batch_action.toolTip()
+    assert "Search/Regex ก่อนเริ่ม" not in window.start_batch_action.toolTip()
+
+    window.rule_keyword.setText("amount")
+    window._rule_controls_changed()
+
+    assert window.start_batch_action.isEnabled()
+    assert window.start_batch_action.toolTip() == "พร้อมเริ่ม Batch"
+
+
 def test_batch_overall_progress_updates_from_worker_signal(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)

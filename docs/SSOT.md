@@ -156,6 +156,9 @@
 - Multi-rule domain contract อยู่ใน `domain/rules.py`; pure evaluator อยู่ใน `application/rule_pipeline.py`; UI dictionary mapping อยู่ใน `application/rule_mapper.py`
 - Rule preset ใช้ TOML schema 6 และเก็บ hierarchy `rule_groups -> branches -> conditions/overlays`; schema 5 ต้อง migrate ในหน่วยความจำเป็นหนึ่ง Condition ต่อ Branch และ preset schema 1-4 ยังโหลดใน legacy mode ได้
 - โหมด legacy และ multi-rule ต้องอยู่ร่วมกันได้: ถ้าไม่มี Rule Group ให้ใช้ flat overlays + Page Filter เดิม; ถ้ามี Rule Group ให้ Rule Pipeline เป็นเจ้าของการเลือก Layers และไม่ใช้ Page Filter เดิมซ้ำ
+- Batch readiness ต้องแยก `invalid_page_filter` ของโหมด legacy ออกจาก `invalid_rules`
+  ของ multi-rule; เมื่อมี Rule Group ค่า Search/Page Filter เดิมห้าม block การเริ่มงาน และ tooltip
+  ของปุ่ม Start ต้องแสดง validation issue ของ Rule/Condition ที่เป็นสาเหตุจริง
 - Rule evaluation อ่าน text layer ของแต่ละหน้าเพียงครั้งต่อ Group และ export output เพียงครั้งเดียว ห้ามสร้าง output กลาง N รอบ
 - Branch ที่ disabled ถูกข้ามและตรวจ Branch ถัดไป; Group ที่ disabled ถูกข้ามทั้งกลุ่ม; Layer ที่ disabled ไม่ถูก render
 - Compound Branch คำนวณ Conditions ที่ enabled เท่านั้น: `all([])` และ `any([])` ต้องถือเป็น false เพื่อป้องกัน Branch ว่าง match โดยไม่ตั้งใจ

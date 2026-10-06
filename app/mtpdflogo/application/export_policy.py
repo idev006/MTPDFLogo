@@ -45,12 +45,15 @@ def evaluate_batch_readiness(
     is_running: bool,
     page_filter_error: str | None,
     has_effective_overlay: bool,
+    rule_error: str | None = None,
 ) -> BatchReadiness:
     """Return the start-button readiness decision without depending on Qt widgets."""
     if is_running:
         return BatchReadiness(False, "running")
     if not has_jobs:
         return BatchReadiness(False, "missing_jobs")
+    if rule_error is not None:
+        return BatchReadiness(False, "invalid_rules")
     if page_filter_error is not None:
         return BatchReadiness(False, "invalid_page_filter")
     if not has_effective_overlay:

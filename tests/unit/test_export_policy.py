@@ -173,6 +173,16 @@ def test_evaluate_batch_readiness_explains_blocking_reason() -> None:
         ).reason
         == "invalid_page_filter"
     )
+    assert (
+        evaluate_batch_readiness(
+            has_jobs=True,
+            is_running=False,
+            page_filter_error=None,
+            has_effective_overlay=True,
+            rule_error="missing condition keyword",
+        ).reason
+        == "invalid_rules"
+    )
     assert evaluate_batch_readiness(
         has_jobs=True,
         is_running=False,

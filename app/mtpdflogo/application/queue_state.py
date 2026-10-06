@@ -5,6 +5,7 @@ READINESS_MESSAGES = {
     "running": "กำลังประมวลผล",
     "missing_jobs": "ยังไม่มีไฟล์ใน queue",
     "invalid_page_filter": "แก้เงื่อนไข Search/Regex ก่อนเริ่ม",
+    "invalid_rules": "แก้ Rules/Conditions ก่อนเริ่ม",
     "missing_overlay": "เพิ่ม Text หรือ Logo ก่อนเริ่ม",
     "missing_output": "เลือก Output Folder ก่อนเริ่ม",
 }

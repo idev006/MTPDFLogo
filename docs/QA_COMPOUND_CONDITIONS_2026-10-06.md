@@ -52,6 +52,8 @@ slice, per project scope.
 - Native OS theme and the existing resizable workspace are retained.
 - A 1100x650 responsive-layout regression verifies that the Rule Editor scrolls vertically and
   the final range control remains inside the Condition Stack instead of being clipped.
+- Readiness regression verifies that incomplete compound Rules report the exact Condition issue,
+  while invalid legacy Search/Regex settings are ignored whenever Rule Groups own the pipeline.
 
 ## Remaining backlog (not release blockers)
 

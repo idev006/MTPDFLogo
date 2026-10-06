@@ -2203,7 +2203,7 @@ class MainWindow(QMainWindow):
             self.page_filter_result.setText("Search ปิดอยู่ — จะวาง overlay ทุกหน้า")
         else:
             self.page_filter_result.setText("เงื่อนไขเปลี่ยนแล้ว — กดทดสอบ Search อีกครั้ง")
-        error = self._page_filter_error()
+        error = None if self._rule_groups else self._page_filter_error()
         if error:
             self.start_batch_action.setEnabled(False)
             self._update_queue_summary()
@@ -2296,18 +2296,21 @@ class MainWindow(QMainWindow):
             )
 
     def _page_filter_error(self) -> str | None:
-        if self._rule_groups:
-            try:
-                issues = blocking_rule_issues(self._rule_models())
-            except (TypeError, ValueError) as error:
-                return str(error)
-            return issues[0] if issues else None
         return page_filter_error(
             enabled=self.page_filter_enabled.isChecked(),
             keyword=self.page_filter_keyword.text(),
             use_regex=self.page_filter_regex.isChecked(),
             page_ranges=self.page_filter_ranges.text(),
         )
+
+    def _rule_error(self) -> str | None:
+        if not self._rule_groups:
+            return None
+        try:
+            issues = blocking_rule_issues(self._rule_models())
+        except (TypeError, ValueError) as error:
+            return str(error)
+        return issues[0] if issues else None
 
     def _page_text_rule(self) -> PageTextRule | None:
         if self._rule_groups:
@@ -2482,15 +2485,21 @@ class MainWindow(QMainWindow):
         for control in self._idle_controls:
             control.setEnabled(not busy)
         self._pending_batch_jobs = self._queue_jobs_from_table()
+        rule_error = self._rule_error()
         readiness = evaluate_batch_readiness(
             has_jobs=bool(self._pending_batch_jobs),
             is_running=busy,
-            page_filter_error=self._page_filter_error(),
+            page_filter_error=(None if self._rule_groups else self._page_filter_error()),
             has_effective_overlay=self._has_effective_overlay(),
+            rule_error=rule_error,
         )
         self._batch_readiness_reason = readiness.reason
         self.start_batch_action.setEnabled(readiness.can_start)
-        start_message = blocked_start_message(readiness.reason)
+        start_message = (
+            f"เริ่มไม่ได้: {rule_error}"
+            if readiness.reason == "invalid_rules" and rule_error
+            else blocked_start_message(readiness.reason)
+        )
         self.start_batch_action.setToolTip(start_message)
         self.start_batch_action.setStatusTip(start_message)
         self._update_queue_summary()
@@ -3507,7 +3516,7 @@ class MainWindow(QMainWindow):
             input_root=self._input_root,
             output_root=output_root,
             has_effective_overlay=self._has_effective_overlay(),
-            page_filter_error=self._page_filter_error(),
+            page_filter_error=(None if self._rule_groups else self._page_filter_error()),
             missing_logo_paths=self._missing_logo_paths(self._enabled_rule_overlays()),
             specs=specs,
             page_text_rule=page_text_rule,
