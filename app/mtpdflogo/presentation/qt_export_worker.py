@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from mtpdflogo.application.export_engine import ExportCallbacks, ExportEngine
+from mtpdflogo.domain.rules import RuleGroup
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 
 
@@ -26,8 +27,19 @@ class ExportWorker(QObject):
         manifest_path: Path,
         worker_count: int,
         resume_enabled: bool = True,
+        rule_groups: list[RuleGroup] | tuple[RuleGroup, ...] | None = None,
     ) -> None:
         super().__init__()
+        options = {
+            "callbacks": ExportCallbacks(
+                progress=self.progress.emit,
+                file_progress=self.file_progress.emit,
+                file_updated=self.file_updated.emit,
+                file_failed=self.file_failed.emit,
+            )
+        }
+        if rule_groups is not None:
+            options["rule_groups"] = rule_groups
         self._engine = ExportEngine(
             jobs,
             specs,
@@ -35,12 +47,7 @@ class ExportWorker(QObject):
             manifest_path,
             worker_count,
             resume_enabled,
-            callbacks=ExportCallbacks(
-                progress=self.progress.emit,
-                file_progress=self.file_progress.emit,
-                file_updated=self.file_updated.emit,
-                file_failed=self.file_failed.emit,
-            ),
+            **options,
         )
 
     def cancel(self) -> None:

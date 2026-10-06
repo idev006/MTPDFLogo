@@ -25,6 +25,8 @@ def missing_logo_paths(overlays: list[dict[str, Any]]) -> list[str]:
     """Return missing logo asset issues for preflight display."""
     missing: list[str] = []
     for item in overlays:
+        if not item.get("enabled", True):
+            continue
         if item.get("type") is not OverlayType.IMAGE:
             continue
         asset_path = str(item.get("asset_path", "")).strip()
@@ -38,6 +40,8 @@ def missing_logo_paths(overlays: list[dict[str, Any]]) -> list[str]:
 def has_effective_overlay(overlays: list[dict[str, Any]]) -> bool:
     """Return True when at least one item can visibly change output bytes."""
     for item in overlays:
+        if not item.get("enabled", True):
+            continue
         if item.get("type") is OverlayType.TEXT and str(item.get("text", "")).strip():
             return True
         if item.get("type") is OverlayType.IMAGE and str(item.get("asset_path", "")).strip():
@@ -88,6 +92,7 @@ def overlays_to_specs(
                 opacity=float(item.get("opacity", 100)) / 100,
                 rotation=int(item.get("rotation", 0)),
                 width_percent=float(item.get("logo_size", 12)),
+                enabled=bool(item.get("enabled", True)),
                 z_index=int(item.get("z_index", 0)),
             )
         )

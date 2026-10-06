@@ -87,14 +87,23 @@ from mtpdflogo.application.overlay_mapper import (
 from mtpdflogo.application.page_search import search_pdf_batch, search_pdf_pages
 from mtpdflogo.application.positioning import point_to_percent, resolve_overlay_top_left
 from mtpdflogo.application.queue_state import blocked_start_message, queue_summary_text
+from mtpdflogo.application.rule_mapper import all_rule_overlays, rule_groups_to_models
+from mtpdflogo.application.rule_pipeline import (
+    blocking_rule_issues,
+    evaluate_rule_group,
+    validate_rule_groups,
+)
 from mtpdflogo.config import (
     font_directory,
+    is_rule_preset,
     load_config,
     load_overlay_preset,
     load_page_filter_options,
     load_preferences,
+    load_rule_preset,
     save_overlay_preset,
     save_preferences,
+    save_rule_preset,
 )
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
 from mtpdflogo.infrastructure.pdf.overlay_service import (
@@ -308,6 +317,11 @@ class MainWindow(QMainWindow):
         self._input_root: Path | None = None
         self._scene = QGraphicsScene(self)
         self._overlays: list[dict[str, Any]] = []
+        self._legacy_overlays = self._overlays
+        self._rule_groups: list[dict[str, Any]] = []
+        self._active_rule_group_id: str | None = None
+        self._active_rule_branch_id: str | None = None
+        self._updating_rules = False
         self._pending_batch_jobs: list[tuple[Path, Path]] = []
         self._last_export_jobs: list[tuple[Path, Path]] = []
         self._export_started_at: float | None = None
@@ -464,7 +478,7 @@ class MainWindow(QMainWindow):
         self.pipeline_labels: list[QLabel] = []
         steps = [
             ("1", "เลือกไฟล์/โฟลเดอร์"),
-            ("2", "ตั้ง Text/Logo"),
+            ("2", "ตั้ง Rules/Layers"),
             ("3", "ตั้ง Output"),
             ("4", "เริ่ม Batch"),
             ("5", "ตรวจ Output"),
@@ -1015,16 +1029,22 @@ class MainWindow(QMainWindow):
         panel.setMinimumWidth(180)
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
-        title = QLabel("OVERLAY ITEMS")
+        title = QLabel("RULES & LAYERS")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
+        self.rule_layer_tabs = QTabWidget()
+        self.rule_layer_tabs.addTab(self._build_rule_editor(), "เงื่อนไข")
+        layers = QWidget()
+        layers_layout = QVBoxLayout(layers)
+        layers_layout.setContentsMargins(0, 4, 0, 0)
         delete = QPushButton("ลบรายการที่เลือก  (Delete)")
         delete.clicked.connect(self._delete_selected)
-        layout.addWidget(delete)
+        layers_layout.addWidget(delete)
         self.overlay_list = QListWidget()
         self.overlay_list.setToolTip("ยังไม่มี overlay — กด + Text หรือ + Logo เพื่อเริ่ม")
         self.overlay_list.currentRowChanged.connect(self._select_overlay)
-        layout.addWidget(self.overlay_list, 1)
+        self.overlay_list.itemChanged.connect(self._layer_enabled_changed)
+        layers_layout.addWidget(self.overlay_list, 1)
         buttons = QHBoxLayout()
         text_button = QPushButton("+ Text")
         text_button.clicked.connect(lambda: self._add_overlay(OverlayType.TEXT))
@@ -1034,12 +1054,433 @@ class MainWindow(QMainWindow):
         both_button.clicked.connect(self._add_text_and_logo)
         buttons.addWidget(text_button)
         buttons.addWidget(logo_button)
-        layout.addLayout(buttons)
-        layout.addWidget(both_button)
+        layers_layout.addLayout(buttons)
+        layers_layout.addWidget(both_button)
         duplicate = QPushButton("ทำสำเนารายการที่เลือก")
         duplicate.clicked.connect(self._duplicate_overlay)
-        layout.addWidget(duplicate)
+        layers_layout.addWidget(duplicate)
+        layer_order = QHBoxLayout()
+        forward = QPushButton("ขึ้นหน้า")
+        forward.clicked.connect(lambda: self._move_layer(-1))
+        backward = QPushButton("ลงหลัง")
+        backward.clicked.connect(lambda: self._move_layer(1))
+        lock = QPushButton("ล็อก/ปลดล็อก")
+        lock.clicked.connect(self._toggle_layer_lock)
+        layer_order.addWidget(forward)
+        layer_order.addWidget(backward)
+        layer_order.addWidget(lock)
+        layers_layout.addLayout(layer_order)
+        self.rule_layer_tabs.addTab(layers, "Layers")
+        layout.addWidget(self.rule_layer_tabs, 1)
         return panel
+
+    def _build_rule_editor(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 4, 0, 0)
+        self.rule_group_combo = QComboBox()
+        self.rule_group_combo.setPlaceholderText("ยังไม่มี Rule Group — ใช้โหมดเดิม")
+        self.rule_group_combo.currentIndexChanged.connect(self._rule_group_selected)
+        layout.addWidget(self.rule_group_combo)
+        group_buttons = QHBoxLayout()
+        add_group = QPushButton("+ Rule Group")
+        add_group.clicked.connect(self._add_rule_group)
+        remove_group = QPushButton("ลบ Group")
+        remove_group.clicked.connect(self._delete_rule_group)
+        group_buttons.addWidget(add_group)
+        group_buttons.addWidget(remove_group)
+        layout.addLayout(group_buttons)
+        self.rule_group_enabled = QCheckBox("เปิดใช้งาน Rule Group")
+        self.rule_group_enabled.toggled.connect(self._rule_controls_changed)
+        layout.addWidget(self.rule_group_enabled)
+        group_form = QFormLayout()
+        self.rule_group_name = QLineEdit()
+        self.rule_group_name.setPlaceholderText("เช่น จำนวนเงิน")
+        self.rule_group_name.editingFinished.connect(self._rule_controls_changed)
+        self.rule_keyword = QLineEdit()
+        self.rule_keyword.setPlaceholderText("คำหรือ Regex ที่ต้องการนับ")
+        self.rule_keyword.editingFinished.connect(self._rule_controls_changed)
+        self.rule_regex = QCheckBox("Regex")
+        self.rule_regex.toggled.connect(self._rule_controls_changed)
+        self.rule_scope = QComboBox()
+        self.rule_scope.addItem("นับแยกแต่ละหน้า", "page")
+        self.rule_scope.addItem("นับรวมทั้งเอกสาร", "document")
+        self.rule_scope.currentIndexChanged.connect(self._rule_controls_changed)
+        self.rule_page_ranges = QLineEdit()
+        self.rule_page_ranges.setPlaceholderText("ทุกหน้า หรือ 1-3,5")
+        self.rule_page_ranges.editingFinished.connect(self._rule_controls_changed)
+        group_form.addRow("ชื่อ", self.rule_group_name)
+        group_form.addRow("ค้นหา", self.rule_keyword)
+        group_form.addRow("รูปแบบ", self.rule_regex)
+        group_form.addRow("ขอบเขต", self.rule_scope)
+        group_form.addRow("ช่วงหน้า", self.rule_page_ranges)
+        layout.addLayout(group_form)
+        layout.addWidget(QLabel("IF / ELIF / ELSE — ตรวจจากบนลงล่าง"))
+        self.rule_branch_list = QListWidget()
+        self.rule_branch_list.currentRowChanged.connect(self._rule_branch_selected)
+        self.rule_branch_list.itemChanged.connect(self._branch_enabled_changed)
+        layout.addWidget(self.rule_branch_list, 1)
+        branch_buttons = QHBoxLayout()
+        add_branch = QPushButton("+ เงื่อนไข")
+        add_branch.clicked.connect(self._add_rule_branch)
+        add_else = QPushButton("+ Else")
+        add_else.clicked.connect(self._add_else_branch)
+        delete_branch = QPushButton("ลบ")
+        delete_branch.clicked.connect(self._delete_rule_branch)
+        branch_buttons.addWidget(add_branch)
+        branch_buttons.addWidget(add_else)
+        branch_buttons.addWidget(delete_branch)
+        layout.addLayout(branch_buttons)
+        branch_form = QFormLayout()
+        self.branch_min = QSpinBox()
+        self.branch_min.setRange(0, 1_000_000)
+        self.branch_min.valueChanged.connect(self._rule_controls_changed)
+        self.branch_max = QSpinBox()
+        self.branch_max.setRange(0, 1_000_000)
+        self.branch_max.valueChanged.connect(self._rule_controls_changed)
+        self.branch_range = RangeSlider(0, 100, 3, 3)
+        self.branch_range.rangeChanged.connect(self._branch_range_changed)
+        branch_form.addRow("อย่างน้อย", self.branch_min)
+        branch_form.addRow("ไม่เกิน", self.branch_max)
+        branch_form.addRow("ช่วง 0–100", self.branch_range)
+        layout.addLayout(branch_form)
+        self.rule_diagnostic = QLabel(
+            "โหมดเดิม: Page Filter หนึ่งเงื่อนไข ใช้ได้ตามปกติ"
+        )
+        self.rule_diagnostic.setWordWrap(True)
+        layout.addWidget(self.rule_diagnostic)
+        return panel
+
+    @staticmethod
+    def _new_rule_id(prefix: str, existing: list[str]) -> str:
+        return new_overlay_id(existing).replace("overlay-", f"{prefix}-", 1)
+
+    def _active_rule_group(self) -> dict[str, Any] | None:
+        return next(
+            (item for item in self._rule_groups if item["id"] == self._active_rule_group_id),
+            None,
+        )
+
+    def _active_rule_branch(self) -> dict[str, Any] | None:
+        group = self._active_rule_group()
+        if group is None:
+            return None
+        return next(
+            (item for item in group["branches"] if item["id"] == self._active_rule_branch_id),
+            None,
+        )
+
+    def _add_rule_group(self) -> None:
+        if not self._rule_groups:
+            self._legacy_overlays = self._overlays
+        group_id = self._new_rule_id("rule", [item["id"] for item in self._rule_groups])
+        branch_id = self._new_rule_id("branch", [])
+        group = {
+            "id": group_id,
+            "name": f"Rule Group {len(self._rule_groups) + 1}",
+            "enabled": True,
+            "keyword": self.page_filter_keyword.text().strip(),
+            "use_regex": self.page_filter_regex.isChecked(),
+            "case_sensitive": False,
+            "page_ranges": self.page_filter_ranges.text().strip(),
+            "scope": "page",
+            "branches": [
+                {
+                    "id": branch_id,
+                    "name": "เท่ากับ 3",
+                    "enabled": True,
+                    "is_else": False,
+                    "min_occurrences": 3,
+                    "max_occurrences": 3,
+                    "overlays": [],
+                }
+            ],
+        }
+        self._rule_groups.append(group)
+        self._active_rule_group_id = group_id
+        self._active_rule_branch_id = branch_id
+        self._rebuild_rule_controls()
+        self.rule_layer_tabs.setCurrentIndex(0)
+        self._activate_rule_branch()
+
+    def _delete_rule_group(self) -> None:
+        group = self._active_rule_group()
+        if group is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "ลบ Rule Group?",
+            f"ลบ {group['name']} พร้อมทุกเงื่อนไขและ Layers หรือไม่?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._rule_groups = [item for item in self._rule_groups if item["id"] != group["id"]]
+        self._active_rule_group_id = self._rule_groups[0]["id"] if self._rule_groups else None
+        next_group = self._active_rule_group()
+        self._active_rule_branch_id = (
+            next_group["branches"][0]["id"] if next_group and next_group["branches"] else None
+        )
+        if not self._rule_groups:
+            self._overlays = self._legacy_overlays
+        self._rebuild_rule_controls()
+        self._activate_rule_branch()
+
+    def _add_rule_branch(self) -> None:
+        group = self._active_rule_group()
+        if group is None:
+            self._add_rule_group()
+            return
+        regular = [branch for branch in group["branches"] if not branch.get("is_else")]
+        value = max((int(branch.get("max_occurrences", 1)) for branch in regular), default=1) + 2
+        branch = {
+            "id": self._new_rule_id(
+                "branch", [item["id"] for item in group["branches"]]
+            ),
+            "name": f"เท่ากับ {value}",
+            "enabled": True,
+            "is_else": False,
+            "min_occurrences": value,
+            "max_occurrences": value,
+            "overlays": [],
+        }
+        else_index = next(
+            (index for index, item in enumerate(group["branches"]) if item.get("is_else")),
+            len(group["branches"]),
+        )
+        group["branches"].insert(else_index, branch)
+        self._active_rule_branch_id = branch["id"]
+        self._rebuild_rule_controls()
+        self._activate_rule_branch()
+
+    def _add_else_branch(self) -> None:
+        group = self._active_rule_group()
+        if group is None:
+            self._add_rule_group()
+            group = self._active_rule_group()
+        if group is None:
+            return
+        existing = next((item for item in group["branches"] if item.get("is_else")), None)
+        if existing is None:
+            existing = {
+                "id": self._new_rule_id(
+                    "branch", [item["id"] for item in group["branches"]]
+                ),
+                "name": "ค่าอื่น (Else)",
+                "enabled": True,
+                "is_else": True,
+                "min_occurrences": 0,
+                "max_occurrences": 0,
+                "overlays": [],
+            }
+            group["branches"].append(existing)
+        self._active_rule_branch_id = existing["id"]
+        self._rebuild_rule_controls()
+        self._activate_rule_branch()
+
+    def _delete_rule_branch(self) -> None:
+        group = self._active_rule_group()
+        branch = self._active_rule_branch()
+        if group is None or branch is None:
+            return
+        group["branches"] = [item for item in group["branches"] if item["id"] != branch["id"]]
+        self._active_rule_branch_id = (
+            group["branches"][0]["id"] if group["branches"] else None
+        )
+        self._rebuild_rule_controls()
+        self._activate_rule_branch()
+
+    def _rule_group_selected(self, index: int) -> None:
+        if self._updating_rules or index < 0:
+            return
+        self._active_rule_group_id = str(self.rule_group_combo.itemData(index))
+        group = self._active_rule_group()
+        self._active_rule_branch_id = (
+            group["branches"][0]["id"] if group and group["branches"] else None
+        )
+        self._rebuild_rule_controls()
+        self._activate_rule_branch()
+
+    def _rule_branch_selected(self, row: int) -> None:
+        if self._updating_rules or row < 0:
+            return
+        self._active_rule_branch_id = str(
+            self.rule_branch_list.item(row).data(Qt.ItemDataRole.UserRole)
+        )
+        self._sync_rule_fields()
+        self._activate_rule_branch()
+
+    def _branch_enabled_changed(self, item: QListWidgetItem) -> None:
+        if self._updating_rules:
+            return
+        group = self._active_rule_group()
+        if group is None:
+            return
+        branch_id = item.data(Qt.ItemDataRole.UserRole)
+        branch = next((entry for entry in group["branches"] if entry["id"] == branch_id), None)
+        if branch is not None:
+            branch["enabled"] = item.checkState() == Qt.CheckState.Checked
+            self._update_rule_diagnostic()
+            self._refresh_batch_readiness()
+
+    def _rule_controls_changed(self, *_args: Any) -> None:
+        if self._updating_rules:
+            return
+        group = self._active_rule_group()
+        branch = self._active_rule_branch()
+        if group is None:
+            return
+        group.update(
+            {
+                "name": self.rule_group_name.text().strip() or "Rule Group",
+                "enabled": self.rule_group_enabled.isChecked(),
+                "keyword": self.rule_keyword.text(),
+                "use_regex": self.rule_regex.isChecked(),
+                "scope": str(self.rule_scope.currentData()),
+                "page_ranges": self.rule_page_ranges.text().strip(),
+            }
+        )
+        if branch is not None and not branch.get("is_else"):
+            branch["min_occurrences"] = self.branch_min.value()
+            branch["max_occurrences"] = self.branch_max.value()
+            branch["name"] = (
+                f"เท่ากับ {self.branch_min.value()}"
+                if self.branch_min.value() == self.branch_max.value()
+                else f"ช่วง {self.branch_min.value()}–{self.branch_max.value()}"
+            )
+        self._rebuild_rule_controls(preserve_selection=True)
+        self._update_rule_diagnostic()
+        self._refresh_preview()
+        self._refresh_batch_readiness()
+
+    def _branch_range_changed(self, minimum: int, maximum: int) -> None:
+        if self._updating_rules:
+            return
+        self._updating_rules = True
+        self.branch_min.setValue(minimum)
+        self.branch_max.setValue(maximum)
+        self._updating_rules = False
+        self._rule_controls_changed()
+
+    def _rebuild_rule_controls(self, *, preserve_selection: bool = False) -> None:
+        self._updating_rules = True
+        self.rule_group_combo.clear()
+        for group in self._rule_groups:
+            self.rule_group_combo.addItem(group["name"], group["id"])
+        group = self._active_rule_group()
+        if group is not None:
+            index = self.rule_group_combo.findData(group["id"])
+            self.rule_group_combo.setCurrentIndex(index)
+        self.rule_branch_list.clear()
+        if group is not None:
+            for index, branch in enumerate(group["branches"]):
+                prefix = "Else" if branch.get("is_else") else ("If" if index == 0 else "Elif")
+                item = QListWidgetItem(
+                    f"{prefix}: {branch['name']}  ·  {len(branch.get('overlays', []))} Layers"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, branch["id"])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if branch.get("enabled", True)
+                    else Qt.CheckState.Unchecked
+                )
+                self.rule_branch_list.addItem(item)
+            branch_row = next(
+                (
+                    row
+                    for row in range(self.rule_branch_list.count())
+                    if self.rule_branch_list.item(row).data(Qt.ItemDataRole.UserRole)
+                    == self._active_rule_branch_id
+                ),
+                0 if self.rule_branch_list.count() else -1,
+            )
+            self.rule_branch_list.setCurrentRow(branch_row)
+        self._updating_rules = False
+        self._sync_rule_fields()
+        if not preserve_selection:
+            self._update_rule_diagnostic()
+
+    def _sync_rule_fields(self) -> None:
+        group = self._active_rule_group()
+        branch = self._active_rule_branch()
+        self._updating_rules = True
+        enabled = group is not None
+        for control in (
+            self.rule_group_enabled,
+            self.rule_group_name,
+            self.rule_keyword,
+            self.rule_regex,
+            self.rule_scope,
+            self.rule_page_ranges,
+        ):
+            control.setEnabled(enabled)
+        if group is not None:
+            self.rule_group_enabled.setChecked(bool(group.get("enabled", True)))
+            self.rule_group_name.setText(group["name"])
+            self.rule_keyword.setText(group["keyword"])
+            self.rule_regex.setChecked(bool(group.get("use_regex", False)))
+            self.rule_scope.setCurrentIndex(self.rule_scope.findData(group.get("scope", "page")))
+            self.rule_page_ranges.setText(group.get("page_ranges", ""))
+        is_condition = branch is not None and not branch.get("is_else")
+        self.branch_min.setEnabled(is_condition)
+        self.branch_max.setEnabled(is_condition)
+        self.branch_range.setEnabled(is_condition)
+        if branch is not None:
+            self.branch_min.setValue(int(branch.get("min_occurrences", 0)))
+            maximum = branch.get("max_occurrences", 0)
+            self.branch_max.setValue(1_000_000 if maximum is None else int(maximum))
+            self.branch_range.setValues(
+                min(100, self.branch_min.value()),
+                min(100, max(self.branch_min.value(), self.branch_max.value())),
+            )
+        self._updating_rules = False
+
+    def _activate_rule_branch(self) -> None:
+        branch = self._active_rule_branch()
+        if branch is not None:
+            self._overlays = branch["overlays"]
+        elif self._rule_groups:
+            self._overlays = []
+        else:
+            self._overlays = self._legacy_overlays
+        self._rebuild_overlay_list()
+        self._refresh_preview()
+        self._update_rule_diagnostic()
+        self._refresh_batch_readiness()
+
+    def _update_rule_diagnostic(self) -> None:
+        if not self._rule_groups:
+            self.rule_diagnostic.setText(
+                "โหมดเดิม: Page Filter หนึ่งเงื่อนไข ใช้ได้ตามปกติ"
+            )
+            return
+        try:
+            groups = rule_groups_to_models(self._rule_groups, self._font_path)
+            issues = validate_rule_groups(groups)
+        except (TypeError, ValueError) as error:
+            issues = [str(error)]
+        if issues:
+            self.rule_diagnostic.setText("ตรวจสอบก่อนเริ่ม: " + " | ".join(issues[:3]))
+            return
+        group = self._active_rule_group()
+        branch = self._active_rule_branch()
+        state = "เปิด" if group and group.get("enabled") else "ปิด"
+        self.rule_diagnostic.setText(
+            f"{state} · {branch['name'] if branch else 'ยังไม่มี Branch'} · "
+            f"{len(self._overlays)} Layers"
+        )
+
+    def _layer_enabled_changed(self, item: QListWidgetItem) -> None:
+        if self._updating_properties:
+            return
+        overlay_id = item.data(Qt.ItemDataRole.UserRole)
+        overlay = next((entry for entry in self._overlays if entry["id"] == overlay_id), None)
+        if overlay is not None:
+            overlay["enabled"] = item.checkState() == Qt.CheckState.Checked
+            self._refresh_preview()
+            self._refresh_batch_readiness()
 
     def _duplicate_overlay(self) -> None:
         item = self._selected_model()
@@ -1052,6 +1493,29 @@ class MainWindow(QMainWindow):
             self._rebuild_overlay_list()
             self._select_overlay_by_id(copied["id"])
             self._refresh_batch_readiness()
+
+    def _move_layer(self, offset: int) -> None:
+        row = self.overlay_list.currentRow()
+        target = row + offset
+        if row < 0 or not 0 <= target < len(self._overlays):
+            return
+        self._overlays[row], self._overlays[target] = self._overlays[target], self._overlays[row]
+        for index, overlay in enumerate(reversed(self._overlays)):
+            overlay["z_index"] = index
+        selected_id = self._overlays[target]["id"]
+        self._rebuild_overlay_list()
+        self._select_overlay_by_id(selected_id)
+        self._refresh_preview()
+
+    def _toggle_layer_lock(self) -> None:
+        item = self._selected_model()
+        if item is None:
+            return
+        item["locked"] = not bool(item.get("locked", False))
+        selected_id = item["id"]
+        self._rebuild_overlay_list()
+        self._select_overlay_by_id(selected_id)
+        self._refresh_preview()
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
@@ -1112,6 +1576,9 @@ class MainWindow(QMainWindow):
         self.preview_file.setToolTip("เลือกไฟล์ในคิวเพื่อดูตัวอย่างลายน้ำ")
         self.preview_file.activated.connect(self._select_preview_file)
         layout.addWidget(self.preview_file)
+        self.rule_preview_status = QLabel("โหมดเดิม — แสดง Overlay ชุดเดียว")
+        self.rule_preview_status.setWordWrap(True)
+        layout.addWidget(self.rule_preview_status)
         self._update_page_controls()
         return panel
 
@@ -1526,6 +1993,12 @@ class MainWindow(QMainWindow):
             )
 
     def _page_filter_error(self) -> str | None:
+        if self._rule_groups:
+            try:
+                issues = blocking_rule_issues(self._rule_models())
+            except (TypeError, ValueError) as error:
+                return str(error)
+            return issues[0] if issues else None
         return page_filter_error(
             enabled=self.page_filter_enabled.isChecked(),
             keyword=self.page_filter_keyword.text(),
@@ -1534,6 +2007,8 @@ class MainWindow(QMainWindow):
         )
 
     def _page_text_rule(self) -> PageTextRule | None:
+        if self._rule_groups:
+            return None
         return page_text_rule_from_options(
             enabled=self.page_filter_enabled.isChecked(),
             keyword=self.page_filter_keyword.text(),
@@ -1973,6 +2448,9 @@ class MainWindow(QMainWindow):
         number = len(self._overlays) + 1
         item = {
             "id": new_overlay_id(overlay["id"] for overlay in self._overlays),
+            "name": f"{'Text' if overlay_type is OverlayType.TEXT else 'Logo'} {number}",
+            "enabled": True,
+            "locked": False,
             "type": overlay_type,
             "position_mode": PositionMode.PRESET,
             "position": (
@@ -1987,17 +2465,17 @@ class MainWindow(QMainWindow):
             "font": self.font.currentText(), "logo_size": 12,
             "text": "ข้อความตัวอย่าง" if overlay_type is OverlayType.TEXT else "",
             "asset_path": asset_path, "color": "#000000",
+            "z_index": number - 1,
         }
         self._overlays.append(item)
-        label = "Text" if overlay_type is OverlayType.TEXT else "Logo"
-        list_item = QListWidgetItem(f"{label} {number}")
-        list_item.setData(Qt.ItemDataRole.UserRole, item["id"])
-        self.overlay_list.addItem(list_item)
-        self.overlay_list.setCurrentItem(list_item)
+        self._rebuild_overlay_list()
+        self._select_overlay_by_id(item["id"])
+        if self._rule_groups:
+            self._rebuild_rule_controls(preserve_selection=True)
         self._update_pipeline()
 
     def _save_overlay_settings(self) -> None:
-        if not self._overlays:
+        if not self._has_any_settings():
             QMessageBox.information(
                 self,
                 "ยังไม่มี Settings",
@@ -2020,7 +2498,7 @@ class MainWindow(QMainWindow):
         self._save_overlay_settings_to_file(target)
 
     def _save_default_overlay_settings(self) -> None:
-        if not self._overlays:
+        if not self._has_any_settings():
             QMessageBox.information(
                 self,
                 "ยังไม่มี Settings",
@@ -2056,7 +2534,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"บันทึก Default Settings แล้ว: {target}")
 
     def _save_overlay_settings_to_file(self, target: Path) -> None:
-        save_overlay_preset(target, self._overlays, self._page_filter_settings())
+        if self._rule_groups:
+            save_rule_preset(target, self._rule_groups)
+        else:
+            save_overlay_preset(target, self._overlays, self._page_filter_settings())
         self._preferences.remember_settings_file(target)
         save_preferences(self._preferences)
         self._update_recent_settings_control()
@@ -2108,6 +2589,12 @@ class MainWindow(QMainWindow):
 
     def _load_overlay_settings_file(self, source: Path) -> bool:
         try:
+            if is_rule_preset(source):
+                return self._load_rule_settings_file(source)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "โหลด Settings ไม่สำเร็จ", str(error))
+            return False
+        try:
             loaded = ensure_unique_overlay_ids(load_overlay_preset(source))
             page_filter = load_page_filter_options(source)
         except Exception as error:
@@ -2117,7 +2604,12 @@ class MainWindow(QMainWindow):
         self._preferences.remember_settings_file(source)
         save_preferences(self._preferences)
         self._update_recent_settings_control()
-        self._overlays = loaded
+        self._rule_groups = []
+        self._active_rule_group_id = None
+        self._active_rule_branch_id = None
+        self._legacy_overlays = loaded
+        self._overlays = self._legacy_overlays
+        self._rebuild_rule_controls()
         self._rebuild_overlay_list()
         self._apply_page_filter_settings(page_filter)
         self._refresh_preview()
@@ -2132,6 +2624,45 @@ class MainWindow(QMainWindow):
                 "ไฟล์ Logo ต่อไปนี้ไม่มีอยู่แล้ว:\n" + "\n".join(missing_logos[:8]),
             )
         return True
+
+    def _load_rule_settings_file(self, source: Path) -> bool:
+        try:
+            groups = load_rule_preset(source)
+            for group in groups:
+                for branch in group.get("branches", []):
+                    branch["overlays"] = ensure_unique_overlay_ids(
+                        branch.get("overlays", [])
+                    )
+        except Exception as error:
+            QMessageBox.critical(self, "โหลด Rule Settings ไม่สำเร็จ", str(error))
+            return False
+        self._rule_groups = groups
+        self._active_rule_group_id = groups[0]["id"] if groups else None
+        first_group = self._active_rule_group()
+        self._active_rule_branch_id = (
+            first_group["branches"][0]["id"]
+            if first_group and first_group["branches"]
+            else None
+        )
+        self._preferences.remember_settings_file(source)
+        save_preferences(self._preferences)
+        self._update_recent_settings_control()
+        self._rebuild_rule_controls()
+        self._activate_rule_branch()
+        missing = self._missing_logo_paths(all_rule_overlays(groups))
+        self.statusBar().showMessage(
+            f"โหลด Multi-Rule Settings: {source.name} ({len(groups)} Groups)"
+        )
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Logo ใน Settings หาไม่พบ",
+                "ไฟล์ Logo ต่อไปนี้ไม่มีอยู่แล้ว:\n" + "\n".join(missing[:8]),
+            )
+        return True
+
+    def _has_any_settings(self) -> bool:
+        return bool(all_rule_overlays(self._rule_groups) if self._rule_groups else self._overlays)
 
     def _page_filter_settings(self) -> dict[str, Any]:
         return {
@@ -2196,7 +2727,22 @@ class MainWindow(QMainWindow):
         return missing_logo_paths(overlays)
 
     def _has_effective_overlay(self) -> bool:
-        return has_effective_overlay(self._overlays)
+        return has_effective_overlay(self._enabled_rule_overlays())
+
+    def _enabled_rule_overlays(self) -> list[dict[str, Any]]:
+        if not self._rule_groups:
+            return self._overlays
+        return [
+            overlay
+            for group in self._rule_groups
+            if group.get("enabled", True)
+            for branch in group.get("branches", [])
+            if branch.get("enabled", True)
+            for overlay in branch.get("overlays", [])
+        ]
+
+    def _rule_models(self) -> list[Any]:
+        return rule_groups_to_models(self._rule_groups, self._font_path)
 
     def _show_about_dev(self) -> None:
         QMessageBox.about(self, "About Dev", self._about_dev_text())
@@ -2216,14 +2762,30 @@ class MainWindow(QMainWindow):
         repaired = ensure_unique_overlay_ids(self._overlays)
         if [item["id"] for item in repaired] != [item.get("id") for item in self._overlays]:
             self._overlays = repaired
+            branch = self._active_rule_branch()
+            if branch is not None:
+                branch["overlays"] = self._overlays
+            elif not self._rule_groups:
+                self._legacy_overlays = self._overlays
+        self._updating_properties = True
         self.overlay_list.clear()
         for index, item in enumerate(self._overlays, 1):
             label = "Text" if item["type"] is OverlayType.TEXT else "Logo"
-            list_item = QListWidgetItem(f"{label} {index}")
+            item.setdefault("name", f"{label} {index}")
+            item.setdefault("enabled", True)
+            item.setdefault("locked", False)
+            item.setdefault("z_index", index - 1)
+            lock_prefix = "🔒 " if item["locked"] else ""
+            list_item = QListWidgetItem(lock_prefix + str(item["name"]))
             list_item.setData(Qt.ItemDataRole.UserRole, item["id"])
+            list_item.setFlags(list_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            list_item.setCheckState(
+                Qt.CheckState.Checked if item["enabled"] else Qt.CheckState.Unchecked
+            )
             self.overlay_list.addItem(list_item)
         if self.overlay_list.count():
             self.overlay_list.setCurrentRow(0)
+        self._updating_properties = False
 
     def _selected_model(self) -> dict[str, Any] | None:
         current = self.overlay_list.currentItem()
@@ -2247,13 +2809,15 @@ class MainWindow(QMainWindow):
             self._select_overlay_by_id(overlay_id)
         finally:
             self._selecting_preview = False
+        model = next((item for item in self._overlays if item["id"] == overlay_id), None)
+        locked = bool(model and model.get("locked", False))
         for graphic in self._scene.items():
             if isinstance(graphic, (DraggableTextItem, DraggablePixmapItem)):
                 selected = graphic.overlay_id == overlay_id
                 graphic.setSelected(selected)
                 for child in graphic.childItems():
                     if isinstance(child, OverlayResizeHandle):
-                        child.setVisible(selected)
+                        child.setVisible(selected and not locked)
 
     def _bounded_resize_factor(self, overlay_id: str, factor: float) -> float:
         item = next((item for item in self._overlays if item["id"] == overlay_id), None)
@@ -2587,6 +3151,8 @@ class MainWindow(QMainWindow):
             self._refresh_preview()
 
     def _to_specs(self) -> list[PdfOverlaySpec]:
+        if self._rule_groups:
+            return []
         return overlays_to_specs(self._overlays, self._font_path)
 
     def _export_single(self) -> None:
@@ -2625,17 +3191,19 @@ class MainWindow(QMainWindow):
         output_root = Path(output_text) if output_text else jobs[0][1].parent
         specs = self._to_specs()
         page_text_rule = self._page_text_rule()
+        rule_groups = self._rule_models() if self._rule_groups else None
         preflight = preflight_batch_export(
             jobs=jobs,
             input_root=self._input_root,
             output_root=output_root,
             has_effective_overlay=self._has_effective_overlay(),
             page_filter_error=self._page_filter_error(),
-            missing_logo_paths=self._missing_logo_paths(self._overlays),
+            missing_logo_paths=self._missing_logo_paths(self._enabled_rule_overlays()),
             specs=specs,
             page_text_rule=page_text_rule,
             overwrite=self.overwrite_outputs.isChecked(),
             resume_enabled=self._config.resume_enabled,
+            rule_groups=rule_groups,
         )
         if not preflight.ok:
             QMessageBox.warning(
@@ -2665,6 +3233,7 @@ class MainWindow(QMainWindow):
             preflight.manifest_path,
             self.worker_count.value(),
             self._config.resume_enabled,
+            rule_groups,
         )
         self.cancel_action.setEnabled(True)
         self.start_batch_action.setEnabled(False)
@@ -2786,7 +3355,12 @@ class MainWindow(QMainWindow):
             return
         item_id = self.overlay_list.item(row).data(Qt.ItemDataRole.UserRole)
         self._overlays = [item for item in self._overlays if item["id"] != item_id]
+        branch = self._active_rule_branch()
+        if branch is not None:
+            branch["overlays"] = self._overlays
         self._rebuild_overlay_list()
+        if self._rule_groups:
+            self._rebuild_rule_controls(preserve_selection=True)
         self._refresh_preview()
         self._update_pipeline()
 
@@ -2816,6 +3390,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_preview(self) -> None:
         self._scene.clear()
+        self._update_rule_preview_status()
         if self._image_path is not None:
             self._update_page_controls()
             pixmap = QPixmap(str(self._image_path))
@@ -2850,6 +3425,41 @@ class MainWindow(QMainWindow):
         self._scene.setSceneRect(0, 0, pixmap.width, pixmap.height)
         self._apply_preview_zoom()
 
+    def _update_rule_preview_status(self) -> None:
+        if not hasattr(self, "rule_preview_status"):
+            return
+        group = self._active_rule_group()
+        if group is None:
+            self.rule_preview_status.setText("โหมดเดิม — แสดง Overlay ชุดเดียว")
+            return
+        try:
+            model = next(
+                item for item in self._rule_models() if item.id == group["id"]
+            )
+            if self._document is not None and self._document.page_count:
+                page_text = self._document[self._preview_page_index].get_text("text")
+                document_text = "\n".join(page.get_text("text") for page in self._document)
+            else:
+                page_text = ""
+                document_text = ""
+            match = evaluate_rule_group(
+                model,
+                page_text=page_text,
+                page_number=self._preview_page_index + 1,
+                document_text=document_text,
+            )
+            matched = next(
+                (branch.name for branch in model.branches if branch.id == match.branch_id),
+                "ไม่ตรงเงื่อนไขใด",
+            )
+            selected = self._active_rule_branch()
+            selected_text = f" · กำลังแก้ {selected['name']}" if selected else ""
+            self.rule_preview_status.setText(
+                f"หน้านี้พบ {match.occurrence_count} ครั้ง → {matched}{selected_text}"
+            )
+        except (StopIteration, TypeError, ValueError) as error:
+            self.rule_preview_status.setText(f"Rule ยังไม่พร้อม: {error}")
+
     def _show_empty_preview_state(self) -> None:
         self._scene.setSceneRect(0, 0, 640, 420)
         message = self._scene.addText(
@@ -2870,6 +3480,8 @@ class MainWindow(QMainWindow):
         selected_id = selected["id"] if selected else None
         self.bounds_warning.clear()
         for item in self._overlays:
+            if not item.get("enabled", True):
+                continue
             if (item.get("position_mode") == PositionMode.FIXED_MM
                     or item.get("size_mode") == "mm"):
                 try:
@@ -2896,8 +3508,15 @@ class MainWindow(QMainWindow):
                     graphic.setPos(x, y)
                     self._scene.addItem(graphic)
                     graphic.setSelected(item["id"] == selected_id)
+                    graphic.setZValue(float(item.get("z_index", 0)))
+                    graphic.setFlag(
+                        QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                        not item.get("locked", False),
+                    )
                     handle = OverlayResizeHandle(graphic, item["id"], self)
-                    handle.setVisible(item["id"] == selected_id)
+                    handle.setVisible(
+                        item["id"] == selected_id and not item.get("locked", False)
+                    )
                     if (x < 0 or y < 0 or x + pixmap.width() > preview_width
                             or y + pixmap.height() > preview_height):
                         self.bounds_warning.setText("ลายน้ำเกินขอบหน้า — ปรับ X/Y หรือขนาดก่อนเริ่มงาน")
@@ -2916,8 +3535,15 @@ class MainWindow(QMainWindow):
                 graphic.setPos(x, y)
                 graphic.setSelected(item["id"] == selected_id)
                 self._scene.addItem(graphic)
+                graphic.setZValue(float(item.get("z_index", 0)))
+                graphic.setFlag(
+                    QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                    not item.get("locked", False),
+                )
                 handle = OverlayResizeHandle(graphic, item["id"], self)
-                handle.setVisible(item["id"] == selected_id)
+                handle.setVisible(
+                    item["id"] == selected_id and not item.get("locked", False)
+                )
             elif item["asset_path"]:
                 logo = QPixmap(item["asset_path"])
                 if not logo.isNull():
@@ -2939,8 +3565,15 @@ class MainWindow(QMainWindow):
                     graphic.setPos(x, y)
                     graphic.setSelected(item["id"] == selected_id)
                     self._scene.addItem(graphic)
+                    graphic.setZValue(float(item.get("z_index", 0)))
+                    graphic.setFlag(
+                        QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                        not item.get("locked", False),
+                    )
                     handle = OverlayResizeHandle(graphic, item["id"], self)
-                    handle.setVisible(item["id"] == selected_id)
+                    handle.setVisible(
+                        item["id"] == selected_id and not item.get("locked", False)
+                    )
 
     def _preview_position(
         self,

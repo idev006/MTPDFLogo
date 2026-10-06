@@ -15,7 +15,12 @@ from mtpdflogo.application.batch import (
     output_is_inside_input,
     validate_jobs,
 )
-from mtpdflogo.application.physical_preflight import validate_physical_source
+from mtpdflogo.application.physical_preflight import (
+    validate_physical_source,
+    validate_rule_physical_source,
+)
+from mtpdflogo.application.rule_pipeline import blocking_rule_issues
+from mtpdflogo.domain.rules import RuleGroup
 from mtpdflogo.infrastructure.pdf.overlay_service import PageTextRule, PdfOverlaySpec
 
 
@@ -65,12 +70,21 @@ def preflight_batch_export(
     page_text_rule: PageTextRule | None,
     overwrite: bool,
     resume_enabled: bool,
+    rule_groups: list[RuleGroup] | tuple[RuleGroup, ...] | None = None,
 ) -> BatchPreflightResult:
     """Validate an export request before the UI starts any worker threads."""
     if not jobs:
         return BatchPreflightResult(False, "ยังไม่มีไฟล์", "กรุณาเพิ่มไฟล์ลง Queue ก่อนเริ่ม Batch")
     if page_filter_error:
         return BatchPreflightResult(False, "เงื่อนไขหน้ายังไม่ครบ", page_filter_error)
+    if rule_groups is not None:
+        rule_issues = blocking_rule_issues(rule_groups)
+        if rule_issues:
+            return BatchPreflightResult(
+                False,
+                "Rule Pipeline ยังไม่พร้อม",
+                "\n".join(rule_issues[:8]),
+            )
     if missing_logo_paths:
         return BatchPreflightResult(
             False,
@@ -102,10 +116,15 @@ def preflight_batch_export(
         )
     try:
         for source, _ in jobs:
-            validate_physical_source(source, specs, page_text_rule)
+            if rule_groups is not None:
+                validate_rule_physical_source(source, rule_groups)
+            else:
+                validate_physical_source(source, specs, page_text_rule)
     except (ValueError, OSError, RuntimeError) as error:
         return BatchPreflightResult(False, "ตรวจสอบพิกัดมิลลิเมตรไม่ผ่าน", str(error))
-    current_settings_fingerprint = settings_fingerprint(specs, page_text_rule)
+    current_settings_fingerprint = settings_fingerprint(
+        specs, page_text_rule, rule_groups=rule_groups
+    )
     manifest_path = output_root / ".mtpdflogo-batch-status.json"
     output_conflicts = output_conflict_issues(
         jobs,
@@ -131,6 +150,8 @@ def preflight_batch_export(
 def settings_fingerprint(
     specs: list[PdfOverlaySpec],
     page_text_rule: PageTextRule | None,
+    *,
+    rule_groups: list[RuleGroup] | tuple[RuleGroup, ...] | None = None,
 ) -> str:
     """Return a stable fingerprint for resume-safe batch decisions."""
     payload = {
@@ -173,9 +194,75 @@ def settings_fingerprint(
             if page_text_rule
             else None
         ),
+        "rule_groups": _rule_groups_payload(rule_groups),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _rule_groups_payload(
+    groups: list[RuleGroup] | tuple[RuleGroup, ...] | None,
+) -> list[dict[str, object]] | None:
+    if groups is None:
+        return None
+    payload: list[dict[str, object]] = []
+    for group in groups:
+        payload.append(
+            {
+                "id": group.id,
+                "name": group.name,
+                "keyword": group.keyword,
+                "enabled": group.enabled,
+                "use_regex": group.use_regex,
+                "case_sensitive": group.case_sensitive,
+                "page_ranges": group.page_ranges,
+                "scope": str(group.scope),
+                "branches": [
+                    {
+                        "id": branch.id,
+                        "name": branch.name,
+                        "enabled": branch.enabled,
+                        "is_else": branch.is_else,
+                        "min_occurrences": branch.min_occurrences,
+                        "max_occurrences": branch.max_occurrences,
+                        "overlays": [
+                            _rule_overlay_payload(overlay) for overlay in branch.overlays
+                        ],
+                    }
+                    for branch in group.branches
+                ],
+            }
+        )
+    return payload
+
+
+def _rule_overlay_payload(overlay: object) -> object:
+    if not isinstance(overlay, PdfOverlaySpec):
+        return repr(overlay)
+    return {
+        "overlay_type": str(overlay.overlay_type),
+        "position": str(overlay.position),
+        "position_mode": str(overlay.position_mode),
+        "x_percent": overlay.x_percent,
+        "y_percent": overlay.y_percent,
+        "x_mm": overlay.x_mm,
+        "y_mm": overlay.y_mm,
+        "width_mm": overlay.width_mm,
+        "anchor_mode": overlay.anchor_mode,
+        "text": overlay.text,
+        "asset_path": str(overlay.asset_path) if overlay.asset_path else None,
+        "asset_stat": file_fingerprint(overlay.asset_path),
+        "font_size": overlay.font_size,
+        "font_path": str(overlay.font_path) if overlay.font_path else None,
+        "font_stat": file_fingerprint(overlay.font_path),
+        "color": overlay.color,
+        "opacity": overlay.opacity,
+        "rotation": overlay.rotation,
+        "width_percent": overlay.width_percent,
+        "margin_pt": overlay.margin_pt,
+        "enabled": overlay.enabled,
+        "z_index": overlay.z_index,
+    }
 
 
 def file_fingerprint(path: Path | None) -> dict[str, int] | None:

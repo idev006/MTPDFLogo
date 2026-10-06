@@ -2,6 +2,7 @@ from pathlib import Path
 
 import fitz
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
+from mtpdflogo.domain.rules import RuleBranch, RuleGroup
 from mtpdflogo.infrastructure.pdf.overlay_service import (
     PageTextRule,
     PdfOverlaySpec,
@@ -263,3 +264,42 @@ def test_thai_text_exports_as_visible_pdf_overlay_without_question_marks_path(
             and pixmap.samples[index + 2] < 120
             for index in range(0, len(pixmap.samples), pixmap.n)
         )
+
+
+def test_conditional_rule_pipeline_applies_different_layers_per_page(tmp_path: Path) -> None:
+    source = tmp_path / "conditional-source.pdf"
+    output = tmp_path / "conditional-output.pdf"
+    with fitz.open() as document:
+        for count in (3, 5, 4):
+            page = document.new_page(width=400, height=240)
+            page.insert_text((36, 72), " ".join(["amount"] * count))
+        document.save(source)
+    red = PdfOverlaySpec(
+        overlay_type=OverlayType.TEXT,
+        position=Position.TOP_LEFT,
+        text="THREE",
+        color=(1.0, 0.0, 0.0),
+    )
+    blue = PdfOverlaySpec(
+        overlay_type=OverlayType.TEXT,
+        position=Position.TOP_RIGHT,
+        text="FIVE",
+        color=(0.0, 0.0, 1.0),
+    )
+    rules = [
+        RuleGroup(
+            "amount",
+            "Amount count",
+            "amount",
+            (
+                RuleBranch("three", "Equals 3", (red,), 3, 3),
+                RuleBranch("five", "Equals 5", (blue,), 5, 5),
+                RuleBranch("else", "Else", (), is_else=True),
+            ),
+        )
+    ]
+
+    apply_overlays(source, output, [], rule_groups=rules)
+
+    with fitz.open(output) as result:
+        assert [len(page.get_images(full=True)) for page in result] == [1, 1, 0]

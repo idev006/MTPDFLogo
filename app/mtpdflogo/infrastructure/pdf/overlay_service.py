@@ -15,7 +15,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from mtpdflogo.application.page_ranges import PageRange, page_in_ranges, parse_page_ranges
 from mtpdflogo.application.positioning import resolve_overlay_top_left
+from mtpdflogo.application.rule_pipeline import resolve_page_overlays
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
+from mtpdflogo.domain.rules import RuleGroup, RuleScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +323,7 @@ def apply_overlays(
     destination: Path,
     overlays: list[PdfOverlaySpec],
     page_text_rule: PageTextRule | None = None,
+    rule_groups: list[RuleGroup] | tuple[RuleGroup, ...] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
@@ -328,19 +331,40 @@ def apply_overlays(
     if source.resolve() == destination.resolve():
         raise ValueError("destination must not overwrite the source PDF")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    active = sorted((item for item in overlays if item.enabled), key=lambda item: item.z_index)
+    legacy_active = sorted(
+        (item for item in overlays if item.enabled), key=lambda item: item.z_index
+    )
     with fitz.open(source) as document:
         image_xrefs: dict[tuple[Path, float, int], int] = {}
         physical_cache = {}
         total_pages = document.page_count
+        document_text = None
+        if rule_groups is not None and any(
+            group.enabled and group.scope is RuleScope.DOCUMENT for group in rule_groups
+        ):
+            document_text = "\n".join(page.get_text("text") for page in document)
         for page_number, page in enumerate(document, 1):
             if cancel_check and cancel_check():
                 raise RuntimeError("batch cancelled")
             page_rect = page.rect
-            should_apply = page_text_rule is None or (
-                page_text_rule.matches_page(page_number)
-                and page_text_rule.matches(page.get_text("text"))
-            )
+            if rule_groups is not None:
+                selected, _matches = resolve_page_overlays(
+                    rule_groups,
+                    page_text=page.get_text("text"),
+                    page_number=page_number,
+                    document_text=document_text,
+                )
+                active = sorted(
+                    (item for item in selected if item.enabled),
+                    key=lambda item: item.z_index,
+                )
+                should_apply = bool(active)
+            else:
+                active = legacy_active
+                should_apply = page_text_rule is None or (
+                    page_text_rule.matches_page(page_number)
+                    and page_text_rule.matches(page.get_text("text"))
+                )
             if should_apply:
                 for spec in active:
                     if spec.position_mode is PositionMode.FIXED_MM or spec.width_mm is not None:

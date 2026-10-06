@@ -24,6 +24,8 @@ from mtpdflogo.application.batch import (
     save_manifest,
 )
 from mtpdflogo.application.export_policy import settings_fingerprint
+from mtpdflogo.application.rule_pipeline import resolve_page_overlays
+from mtpdflogo.domain.rules import RuleGroup
 from mtpdflogo.infrastructure.image_overlay_service import apply_image_overlays
 from mtpdflogo.infrastructure.pdf.overlay_service import (
     PageTextRule,
@@ -62,6 +64,7 @@ def process_file_job(
     page_text_rule: PageTextRule | None,
     cancel_event: Any,
     progress_queue: Any,
+    rule_groups: list[RuleGroup] | tuple[RuleGroup, ...] | None = None,
 ) -> None:
     """Top-level worker function so it is safe for Windows spawn/PyInstaller."""
     processor = (
@@ -70,26 +73,34 @@ def process_file_job(
         else apply_overlays
     )
     if source.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
+        image_specs = specs
+        if rule_groups is not None:
+            image_specs, _matches = resolve_page_overlays(
+                rule_groups,
+                page_text="",
+                page_number=1,
+                document_text="",
+            )
         processor(
             source,
             destination,
-            specs,
+            image_specs,
             cancel_check=cancel_event.is_set,
             progress_callback=lambda current, total: progress_queue.put(
                 (str(source), current, total)
             ),
         )
     else:
-        processor(
-            source,
-            destination,
-            specs,
-            page_text_rule=page_text_rule,
-            cancel_check=cancel_event.is_set,
-            progress_callback=lambda current, total: progress_queue.put(
+        options = {
+            "page_text_rule": page_text_rule,
+            "cancel_check": cancel_event.is_set,
+            "progress_callback": lambda current, total: progress_queue.put(
                 (str(source), current, total)
             ),
-        )
+        }
+        if rule_groups is not None:
+            options["rule_groups"] = rule_groups
+        processor(source, destination, specs, **options)
 
 
 class ExportEngine:
@@ -104,6 +115,7 @@ class ExportEngine:
         worker_count: int,
         resume_enabled: bool = True,
         callbacks: ExportCallbacks | None = None,
+        rule_groups: list[RuleGroup] | tuple[RuleGroup, ...] | None = None,
     ) -> None:
         self.jobs = jobs
         self.specs = specs
@@ -112,7 +124,10 @@ class ExportEngine:
         self.worker_count = worker_count
         self.resume_enabled = resume_enabled
         self.callbacks = callbacks or ExportCallbacks()
-        self.settings_fingerprint = settings_fingerprint(specs, page_text_rule)
+        self.rule_groups = rule_groups
+        self.settings_fingerprint = settings_fingerprint(
+            specs, page_text_rule, rule_groups=rule_groups
+        )
         self.cancel_event = threading.Event()
         self.process_cancel_event: Any | None = None
 
@@ -224,6 +239,7 @@ class ExportEngine:
                 self.page_text_rule,
                 self.process_cancel_event,
                 progress_queue,
+                self.rule_groups,
             )
             futures[future] = (source, destination)
             return future

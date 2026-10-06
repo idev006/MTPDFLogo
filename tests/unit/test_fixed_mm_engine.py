@@ -3,9 +3,13 @@ from dataclasses import replace
 import fitz
 import pytest
 from mtpdflogo.application.export_policy import settings_fingerprint
-from mtpdflogo.application.physical_preflight import validate_physical_source
+from mtpdflogo.application.physical_preflight import (
+    validate_physical_source,
+    validate_rule_physical_source,
+)
 from mtpdflogo.application.positioning import resolve_overlay_top_left
 from mtpdflogo.domain.models import OverlayType, Position, PositionMode
+from mtpdflogo.domain.rules import RuleBranch, RuleGroup
 from mtpdflogo.infrastructure.image_overlay_service import apply_image_overlays
 from mtpdflogo.infrastructure.pdf.overlay_service import (
     PageTextRule,
@@ -63,6 +67,40 @@ def test_bounds_filter_and_atomic_output(tmp_path, logo_spec):
     with pytest.raises(ValueError, match="bounds"):
         apply_overlays(source, output, [spec])
     assert output.read_bytes() == before
+
+
+def test_rule_preflight_checks_physical_bounds_only_on_selected_pages(tmp_path, logo_spec):
+    source = tmp_path / "rule-pages.pdf"
+    with fitz.open() as document:
+        document.new_page(width=612, height=1008).insert_text((30, 30), "target " * 3)
+        document.new_page(width=595, height=842).insert_text((30, 30), "target " * 5)
+        document.save(source)
+    low_page_only = replace(logo_spec, y_mm=320)
+    groups = [
+        RuleGroup(
+            "target",
+            "Target",
+            "target",
+            (
+                RuleBranch("three", "3", (low_page_only,), 3, 3),
+                RuleBranch("five", "5", (), 5, 5),
+            ),
+        )
+    ]
+
+    validate_rule_physical_source(source, groups)
+
+    failing = [
+        replace(
+            groups[0],
+            branches=(
+                groups[0].branches[0],
+                RuleBranch("five", "5", (low_page_only,), 5, 5),
+            ),
+        )
+    ]
+    with pytest.raises(ValueError, match="page 2"):
+        validate_rule_physical_source(source, failing)
 
 
 def test_image_physical_units_use_96_dpi(tmp_path, logo_spec):

@@ -76,6 +76,9 @@ def save_overlay_preset(
             [
                 "[[overlays]]",
                 f"id = {_quote(item.get('id') or f'overlay-{index}')}",
+                f"name = {_quote(item.get('name', ''))}",
+                f"enabled = {_bool_value(item.get('enabled', True))}",
+                f"locked = {_bool_value(item.get('locked', False))}",
                 f"type = {_quote(_enum_value(item.get('type'), OverlayType.TEXT))}",
                 "position_mode = "
                 f"{_quote(_enum_value(item.get('position_mode'), PositionMode.PRESET))}",
@@ -95,6 +98,7 @@ def save_overlay_preset(
                 f"opacity = {int(item.get('opacity', 100))}",
                 f"rotation = {int(item.get('rotation', 0))}",
                 f"color = {_quote(item.get('color', '#000000'))}",
+                f"z_index = {int(item.get('z_index', index - 1))}",
                 "",
             ]
         )
@@ -124,6 +128,9 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
         overlays.append(
             {
                 "id": str(raw_item.get("id") or f"overlay-{index}"),
+                "name": str(raw_item.get("name", "")),
+                "enabled": bool(raw_item.get("enabled", True)),
+                "locked": bool(raw_item.get("locked", False)),
                 "type": overlay_type,
                 "position_mode": position_mode,
                 "position": Position(str(raw_item.get("position", default_position.value))),
@@ -141,6 +148,7 @@ def load_overlay_preset(path: Path) -> list[dict[str, Any]]:
                 "text": str(raw_item.get("text", "")),
                 "asset_path": str(raw_item.get("asset_path", "")),
                 "color": str(raw_item.get("color", "#000000")),
+                "z_index": _bounded_int(raw_item.get("z_index", index - 1), -10000, 10000),
             }
         )
     return overlays

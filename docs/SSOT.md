@@ -1,6 +1,6 @@
 # MTPDFLogo — Single Source of Truth
 
-สถานะ: Kickoff / v0.1.0
+สถานะ: Implementing / v0.2.0 Multi-Rule Overlay Pipeline
 
 ## ขอบเขตที่ยืนยันแล้ว
 
@@ -13,6 +13,11 @@
 - Font bundle อยู่ที่ `app/assets/fonts/`
 - ผู้ใช้เพิ่ม Text, Logo หรือทั้งสองชนิดได้หลายรายการ
 - แต่ละรายการตั้งค่าแยกกันได้อย่างอิสระ
+- ผู้ใช้สร้าง Rule Group ได้หลายกลุ่ม; แต่ละกลุ่มเป็น ordered `if/elif/else` chain และแต่ละ Branch มี Text/Logo Layers ของตนเองจำนวน 0..N รายการ
+- ช่วงจำนวนครั้งเขียนเป็น `[min,max]` และเป็น inclusive เสมอ: `min <= n <= max`; `[3,3]` เท่ากับ `n = 3`
+- Rule Group หนึ่งกลุ่มเลือก Branch แรกที่เปิดใช้งานและตรงเงื่อนไขเท่านั้น; ถ้าไม่ตรงจึงเลือก Else ที่เปิดใช้งาน
+- Rule Group หลายกลุ่มประเมินแยกกันและรวม Layers จาก Branch ที่ตรงของแต่ละกลุ่มตามลำดับ Group
+- การนับเลือกได้ทั้งต่อหน้า (`page`) และรวมทั้งเอกสาร (`document`) แต่การวางผลลัพธ์ยังเกิดบนแต่ละหน้าที่ผ่าน page range
 - ผู้ใช้ต้องวาง Text/Logo ได้ 2 วิธี: เลือกตำแหน่งมาตรฐานจาก dropdown 9 จุด หรือ drag-and-drop วางอิสระบน preview
 - ตำแหน่งแบบ drag-and-drop เก็บเป็น percent (`absolute`) หรือมิลลิเมตร (`fixed_mm`) ตามโหมดที่เลือก ไม่ใช่ screen pixel
 - ผู้ใช้ต้องเลือกหน้า preview ของ PDF ได้ก่อนวาง Text/Logo เพื่อให้การวางตำแหน่งอ้างอิงหน้าที่ต้องการ ไม่จำกัดหน้าแรก
@@ -88,6 +93,11 @@
 - แท็บผลลัพธ์เก็บ snapshot รอบล่าสุดแยกจากคิว จึงยังตรวจผลได้หลังล้างคิว มีคำสั่งเปิดไฟล์/โฟลเดอร์ ดู error และลองใหม่เฉพาะ Failed ผ่าน preflight เดิม
 - Splitter handles ต้องมองเห็น/จับลากง่าย มี cursor และ tooltip ที่สื่อว่า resize panel ได้ แต่ visual ต้องบางและไม่เด่นจนแย่งความสนใจจาก preview
 - Settings ของ Text/Logo ต้องบันทึก/โหลดเป็น preset ได้ เพื่อรองรับ process ซ้ำและลด human error
+- Rule Editor ใช้ Decision Ladder แสดง `If / Elif / Else`; ผู้ใช้ไม่ต้องเขียนโค้ดหรือ syntax `[min,max]` เอง
+- หน้าจอออกแบบต้องมี tabs `เงื่อนไข` และ `Layers`; การเลือก Branch เปลี่ยน Layer collection ที่แก้ไขและ Preview ต้องบอก Branch ที่ตรงจริงบนหน้าปัจจุบัน
+- Layer panel ใช้แนวคิด Photoshop: เปิด/ปิดด้วย checkbox/eye, ล็อกการลาก/resize, duplicate, ลบ และจัดลำดับหน้า-หลัง
+- สถานะเปิด/ปิดมี 3 ระดับและต้องบันทึกใน Settings: Rule Group, Branch และ Layer
+- Layer ปิดใช้งานต้องไม่แสดงใน Preview และไม่ถูก Export; การปิดไม่ลบค่าของ Layer
 
 ## Batch contract
 
@@ -136,6 +146,14 @@
 - Progress ในคิวใช้ native delegate พร้อมเปอร์เซ็นต์/จำนวนหน้าจาก worker events และค่าตัวเลขใน item model ไม่สร้าง QProgressBar widget ต่อแถว
 
 - Overlay model คือ `OverlayItem` หนึ่งรายการต่อหนึ่ง Text หรือ Logo
+- Multi-rule domain contract อยู่ใน `domain/rules.py`; pure evaluator อยู่ใน `application/rule_pipeline.py`; UI dictionary mapping อยู่ใน `application/rule_mapper.py`
+- Rule preset ใช้ TOML schema 5 และเก็บ hierarchy `rule_groups -> branches -> overlays`; preset schema 1-4 ยังโหลดใน legacy mode ได้
+- โหมด legacy และ multi-rule ต้องอยู่ร่วมกันได้: ถ้าไม่มี Rule Group ให้ใช้ flat overlays + Page Filter เดิม; ถ้ามี Rule Group ให้ Rule Pipeline เป็นเจ้าของการเลือก Layers และไม่ใช้ Page Filter เดิมซ้ำ
+- Rule evaluation อ่าน text layer ของแต่ละหน้าเพียงครั้งต่อ Group และ export output เพียงครั้งเดียว ห้ามสร้าง output กลาง N รอบ
+- Branch ที่ disabled ถูกข้ามและตรวจ Branch ถัดไป; Group ที่ disabled ถูกข้ามทั้งกลุ่ม; Layer ที่ disabled ไม่ถูก render
+- Else เป็น Branch ปกติที่มี Layers 0..N ได้ แต่หนึ่ง Group เปิด Else ได้ไม่เกินหนึ่ง Branch
+- ช่วง Branch ที่เปิดใช้งานและซ้อนกันต้องถูกแจ้งเตือน; runtime ยังคง deterministic โดยเลือก Branch แรกตามลำดับ
+- ลำดับ Layer ด้านบนใน UI หมายถึงอยู่ด้านหน้ากว่าและ export engine วาดตาม `z_index` จากหลังไปหน้า
 - Overlay ID เป็น UUID-backed string ที่ไม่ซ้ำและแยกจากเลขลำดับแสดงผล; การโหลด preset ต้องซ่อม ID ที่ว่าง/ซ้ำก่อนสร้าง list/preview
 - Overlay preset เป็นไฟล์ TOML มี schema version และเก็บค่าของ Text/Logo แต่ละรายการแยกกัน
 - Position ใช้ preset 9 จุด พร้อม offset/margin

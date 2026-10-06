@@ -48,7 +48,7 @@ def test_main_window_has_single_pdf_picker_and_pipeline(qtbot) -> None:
     assert "Batch PDF (หลายไฟล์)" not in action_labels
     assert [label.text() for label in window.pipeline_labels] == [
         "1  เลือกไฟล์/โฟลเดอร์",
-        "2  ตั้ง Text/Logo",
+        "2  ตั้ง Rules/Layers",
         "3  ตั้ง Output",
         "4  เริ่ม Batch",
         "5  ตรวจ Output",
@@ -1697,3 +1697,78 @@ def test_startup_shows_remembered_input_and_output_folders(qtbot, tmp_path) -> N
     assert window.batch_input_folder.text() == str(input_folder)
     assert window.batch_output_folder.text() == str(output_folder)
     assert window.queue_table.rowCount() == 0
+
+
+def test_rule_branches_own_independent_layer_collections(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._add_rule_group()
+    first_branch = window._active_rule_branch()
+    window._append_overlay(OverlayType.TEXT)
+    window.text_input.setText("THREE")
+    first_overlay_id = window._overlays[0]["id"]
+
+    window._add_rule_branch()
+    second_branch = window._active_rule_branch()
+    window._append_overlay(OverlayType.TEXT)
+    window.text_input.setText("FIVE")
+
+    assert first_branch is not None and second_branch is not None
+    assert first_branch["overlays"][0]["text"] == "THREE"
+    assert second_branch["overlays"][0]["text"] == "FIVE"
+    assert second_branch["overlays"][0]["id"] != first_overlay_id
+    assert window._overlays is second_branch["overlays"]
+
+
+def test_layer_eye_and_lock_are_persisted_in_rule_preset(qtbot, tmp_path) -> None:
+    path = tmp_path / "multi-rule.toml"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._add_rule_group()
+    window._append_overlay(OverlayType.TEXT)
+    item = window.overlay_list.item(0)
+
+    item.setCheckState(Qt.CheckState.Unchecked)
+    window._toggle_layer_lock()
+    window._save_overlay_settings_to_file(path)
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    assert restored._load_overlay_settings_file(path)
+    layer = restored._overlays[0]
+    assert layer["enabled"] is False
+    assert layer["locked"] is True
+    assert restored.overlay_list.item(0).checkState() == Qt.CheckState.Unchecked
+
+
+def test_real_export_uses_different_rule_branch_per_page(qtbot, tmp_path, monkeypatch) -> None:
+    source = tmp_path / "rules.pdf"
+    destination = tmp_path / "output" / "rules-watermask.pdf"
+    destination.parent.mkdir()
+    with fitz.open() as document:
+        for count in (3, 5):
+            page = document.new_page(width=400, height=240)
+            page.insert_text((36, 72), " ".join(["amount"] * count))
+        document.save(source)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    window._add_rule_group()
+    window.rule_keyword.setText("amount")
+    window._rule_controls_changed()
+    window._append_overlay(OverlayType.TEXT)
+    window.text_input.setText("THREE")
+    window._add_rule_branch()
+    window._append_overlay(OverlayType.TEXT)
+    window.text_input.setText("FIVE")
+    window.batch_output_folder.setText(str(destination.parent))
+    window.worker_count.setValue(1)
+    window.open_output_folder_on_finish.setChecked(False)
+    window._populate_queue([(source, destination)])
+
+    assert window._start_export([(source, destination)])
+    qtbot.waitUntil(lambda: not window._export_busy(), timeout=30000)
+
+    with fitz.open(destination) as result:
+        assert [len(page.get_images(full=True)) for page in result] == [1, 1]
