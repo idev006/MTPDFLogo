@@ -50,6 +50,8 @@ slice, per project scope.
 - Selecting another Condition repopulates all controls from that Condition only.
 - Preview status reports each evaluated count with pass/fail marker and the matched Branch.
 - Native OS theme and the existing resizable workspace are retained.
+- A 1100x650 responsive-layout regression verifies that the Rule Editor scrolls vertically and
+  the final range control remains inside the Condition Stack instead of being clipped.
 
 ## Remaining backlog (not release blockers)
 

@@ -91,6 +91,33 @@ def test_preview_canvas_is_large_and_resizable(qtbot) -> None:
     assert window.queue_table.height() > 500
 
 
+def test_rule_editor_scrolls_instead_of_clipping_condition_controls(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1100, 650)
+    window.show()
+    qtbot.waitExposed(window)
+    window._add_rule_group()
+    qtbot.wait(0)
+
+    scroll = window.findChild(QScrollArea, "ruleEditorScroll")
+    condition_box = window.findChild(QGroupBox, "conditionStackBox")
+
+    assert scroll is not None
+    assert condition_box is not None
+    assert scroll.widgetResizable()
+    assert scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert condition_box.minimumHeight() >= 390
+    assert scroll.widget().minimumHeight() >= 850
+    assert scroll.verticalScrollBar().maximum() > 0
+
+    scroll.ensureWidgetVisible(window.branch_range)
+    qtbot.wait(0)
+    assert window.branch_range.isVisible()
+    assert window.branch_range.geometry().bottom() < condition_box.contentsRect().bottom()
+
+
 def test_about_dev_content_is_present_and_privacy_safe(qtbot) -> None:
     window = MainWindow()
     qtbot.addWidget(window)

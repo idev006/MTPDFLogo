@@ -101,6 +101,9 @@
 - Layer panel ใช้แนวคิด Photoshop: เปิด/ปิดด้วย checkbox/eye, ล็อกการลาก/resize, duplicate, ลบ และจัดลำดับหน้า-หลัง
 - สถานะเปิด/ปิดมี 3 ระดับและต้องบันทึกใน Settings: Rule Group, Branch และ Layer
 - Compound mode มีสถานะเปิด/ปิดระดับ Condition เพิ่มอีกหนึ่งระดับและต้องบันทึกใน Settings
+- Rule Editor ต้องมี vertical scroll ของตนเอง; Condition Stack และ form ห้ามถูกบีบต่ำกว่า
+  ความสูงที่อ่าน/ใช้งานได้เมื่อหน้าต่างเตี้ยหรือ panel แคบ และห้ามใช้ horizontal scroll
+  ครอบทั้ง Rule Editor
 - Layer ปิดใช้งานต้องไม่แสดงใน Preview และไม่ถูก Export; การปิดไม่ลบค่าของ Layer
 
 ## Batch contract

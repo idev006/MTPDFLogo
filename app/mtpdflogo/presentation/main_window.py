@@ -1079,6 +1079,7 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(8)
         self.rule_group_combo = QComboBox()
         self.rule_group_combo.setPlaceholderText("ยังไม่มี Rule Group — ใช้โหมดเดิม")
         self.rule_group_combo.currentIndexChanged.connect(self._rule_group_selected)
@@ -1095,6 +1096,10 @@ class MainWindow(QMainWindow):
         self.rule_group_enabled.toggled.connect(self._rule_controls_changed)
         layout.addWidget(self.rule_group_enabled)
         group_form = QFormLayout()
+        group_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        group_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
         self.rule_group_name = QLineEdit()
         self.rule_group_name.setPlaceholderText("เช่น ตรวจแบบฟอร์มและอนุมัติ")
         self.rule_group_name.editingFinished.connect(self._rule_controls_changed)
@@ -1104,8 +1109,13 @@ class MainWindow(QMainWindow):
         group_form.addRow("ชื่อ", self.rule_group_name)
         group_form.addRow("ช่วงหน้า", self.rule_page_ranges)
         layout.addLayout(group_form)
-        layout.addWidget(QLabel("IF / ELIF / ELSE — ตรวจจากบนลงล่าง เลือก Branch แรกที่ตรง"))
+        branch_guide = QLabel(
+            "IF / ELIF / ELSE — ตรวจจากบนลงล่าง และเลือก Branch แรกที่ตรง"
+        )
+        branch_guide.setWordWrap(True)
+        layout.addWidget(branch_guide)
         self.rule_branch_list = QListWidget()
+        self.rule_branch_list.setMinimumHeight(96)
         self.rule_branch_list.currentRowChanged.connect(self._rule_branch_selected)
         self.rule_branch_list.itemChanged.connect(self._branch_enabled_changed)
         layout.addWidget(self.rule_branch_list, 1)
@@ -1119,21 +1129,27 @@ class MainWindow(QMainWindow):
         delete_branch.clicked.connect(self._delete_rule_branch)
         branch_buttons.addWidget(add_branch)
         branch_buttons.addWidget(add_else)
-        branch_buttons.addWidget(delete_branch)
         layout.addLayout(branch_buttons)
+        layout.addWidget(delete_branch)
 
-        condition_box = QGroupBox("Condition Stack — เงื่อนไขย่อยของ Branch ที่เลือก")
+        condition_box = QGroupBox("Conditions ใน Branch")
+        condition_box.setObjectName("conditionStackBox")
+        condition_box.setToolTip("ตั้งเงื่อนไขย่อยทั้งหมดของ Branch ที่กำลังเลือก")
+        condition_box.setMinimumHeight(390)
+        condition_box.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
         condition_layout = QVBoxLayout(condition_box)
-        logic_row = QHBoxLayout()
-        logic_row.addWidget(QLabel("Branch จะตรงเมื่อ"))
+        condition_layout.setSpacing(8)
+        condition_layout.addWidget(QLabel("Branch จะตรงเมื่อ"))
         self.branch_condition_logic = QComboBox()
         self.branch_condition_logic.addItem("ตรงทุกข้อ (AND)", "all")
         self.branch_condition_logic.addItem("ตรงอย่างน้อยหนึ่งข้อ (OR)", "any")
         self.branch_condition_logic.currentIndexChanged.connect(
             self._rule_controls_changed
         )
-        logic_row.addWidget(self.branch_condition_logic, 1)
-        condition_layout.addLayout(logic_row)
+        condition_layout.addWidget(self.branch_condition_logic)
         self.condition_list = QListWidget()
         self.condition_list.setMinimumHeight(90)
         self.condition_list.currentRowChanged.connect(self._condition_selected)
@@ -1149,6 +1165,11 @@ class MainWindow(QMainWindow):
         condition_layout.addLayout(condition_buttons)
 
         condition_form = QFormLayout()
+        condition_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        condition_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        condition_form.setVerticalSpacing(7)
         self.rule_keyword = QLineEdit()
         self.rule_keyword.setPlaceholderText("คำหรือ Regex ที่ต้องการนับ")
         self.rule_keyword.editingFinished.connect(self._rule_controls_changed)
@@ -1182,7 +1203,10 @@ class MainWindow(QMainWindow):
         )
         self.rule_diagnostic.setWordWrap(True)
         layout.addWidget(self.rule_diagnostic)
-        return panel
+        layout.addStretch()
+        scroll = self._scrollable_tab(panel, "ruleEditorScroll")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        return scroll
 
     @staticmethod
     def _new_rule_id(prefix: str, existing: list[str]) -> str:
